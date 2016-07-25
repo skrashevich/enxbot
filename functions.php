@@ -231,9 +231,22 @@ function sendCode($cookies,$domain,$gameid,$code)
 // Telegram Bot Functions
 //
 
-function logMessage($message)
+function logMessage($message, $type=0)
 {
-    file_put_contents('log.txt', print_r($message,true)."\n", FILE_APPEND);
+    $sql = "INSERT INTO log (time, message_id, chat_id, chat_title, text, type, sender_id, sender_username)
+    VALUES (
+        ".time().",
+        $message[message_id],
+        ".$message['chat']['id'].",
+        '".mysql_escape_string($message['chat']['title'])."',
+        '".mysql_escape_string($message['text'])."',
+        $type,
+        ".$message['from']['id'].",
+        '".mysql_escape_string($message['from']['username'])."'
+    )
+    ";
+    mysql_query($sql);
+    return true;
 }
 
 
