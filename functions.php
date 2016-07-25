@@ -85,7 +85,7 @@ function getLevelText($cookies,$domain,$gameid)
 
     // Вычленяем текст задания
 
-    preg_match('#<h3>Задание</h3>.*?<p>(.*?)(<h3>|<div)#ms',$response,$matches);
+    preg_match('#<h3>Задание</h3>.*?<p>(.*?)(<h3|<div)#ms',$response,$matches);
 
     $levelText = $matches[1];
 
@@ -118,7 +118,7 @@ function getHints($cookies,$domain,$gameid)
       $hints[$hint] = "До открытия $remain";
     }
 
-    preg_match_all('#<h3>Подсказка ([0-9]+)</h3>(.*?)<div class="spacer"></div>#sm',$response,$matches,PREG_SET_ORDER);
+    preg_match_all('#<h3>Подсказка ([0-9]+)</h3>(.*?)</p>#sm',$response,$matches,PREG_SET_ORDER);
     foreach($matches as $match)
     {
       $hint = $match[1];
