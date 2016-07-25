@@ -90,7 +90,7 @@ $sqlresult = mysql_query($sql);
 while($timer = mysql_fetch_assoc($sqlresult))
 {
     $remain = $timer['time']-time();
-    $remain_text = round($remain/60)." мин ".($remain-round($remain/60)*60)." сек";
+    $remain_text = floor($remain/60)." мин ".($remain-floor($remain/60)*60)." сек";
     // Если меньше 15 или 5 минут до события
     if( 
         ($remain<=60*15 && $remain>60*14) ||
