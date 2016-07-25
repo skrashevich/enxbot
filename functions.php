@@ -74,7 +74,7 @@ function getLevelText($cookies,$domain,$gameid)
 {
   //
 
-  $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid);
+  $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru');
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_COOKIE, $cookies);
 
@@ -85,7 +85,7 @@ function getLevelText($cookies,$domain,$gameid)
 
     // Вычленяем текст задания
 
-    preg_match('#<h3>Задание</h3>.*?<p>(.*?)</p>#ms',$response,$matches);
+    preg_match('#<h3>Задание</h3>.*?<p>(.*?)(<h3>|<div)#ms',$response,$matches);
 
     $levelText = $matches[1];
 
@@ -216,8 +216,10 @@ function sendCode($cookies,$domain,$gameid,$code)
     {
       $sectors_total = $matches[1];
       $sectors_rem = $matches[2];
+
+      $sectors_done = $sectors_total-$sectors_rem;
     
-      $result .= " ($sectors_rem/$sectors_total)";
+      $result .= " ($sectors_done/$sectors_total)";
     }
 
     return $result;

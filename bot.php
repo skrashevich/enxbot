@@ -41,6 +41,8 @@ $helptext = "Это бот для игры Encounter
 
 Коды пробивать с префиксом & либо #
 Например: &en123
+После кода можно ввести комментарий, например: &en123//3 этаж
+В движок пойдет всё до символов //, в данном случае en123.
 
 /help или /start - помощь
 
@@ -222,6 +224,9 @@ if(isset($update["message"]))
             } else 
             {
                 $code=substr($text,1);
+
+                // Пробиваем в движок все до символов //
+                list($code,$comment) = explode('//', $code, 2);
                 if(!$settings["cookies"])
                     $cookies = auth($settings["game_domain"], $settings["game_login"], $settings["game_pass"]);
                 else {
