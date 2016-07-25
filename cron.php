@@ -85,7 +85,7 @@ while($game = mysql_fetch_assoc($gameresult))
 // По всем играм - проверяем сколько осталось до подсказок и до АПа, шлём информацию
 //
 
-$sql = "SELECT timers.*,games.chat_id FROM timers, games WHERE games.last_level_id >=0 AND games.status=1 AND timers.game_id = games.game_id";
+$sql = "SELECT timers.*,games.chat_id FROM timers, games WHERE games.last_level_id=timers.level_id AND games.status=1 AND timers.game_id = games.game_id";
 $sqlresult = mysql_query($sql);
 while($timer = mysql_fetch_assoc($sqlresult))
 {
