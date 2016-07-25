@@ -1,3 +1,0 @@
-
-Notice: Using deprecated API: use $config->set('HTML.Allowed', ...) instead invoked on line 4 in file /Users/svk/Documents/enbot/functions.php in /Users/svk/Documents/enbot/HTMLPurifier.standalone.php on line 2634
-string(335) "<p>Заглушка, которая будет снята.<br/><br><script src="%D0%A1%D0%B5%D1%82%D1%8C%20%D0%B3%D0%BE%D1%80%D0%BE%D0%B4%D1%81%D0%BA%D0%B8%D1%85%20%D0%B8%D0%B3%D1%80%20Encounte1r_files/karti_kordi.js" language="JavaScript"></script><br/><br><script language="JavaScript">createCoordLoka("55.4905 38.3755"); </script>"
