@@ -176,6 +176,7 @@ if(isset($update["message"]))
                             $lon = $match[3];
 
                             apiRequestJSON("sendLocation", array('chat_id' => $chat_id, "latitude" => $lat, "longitude" => $lon));
+                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => "$lat $lon"));
                             apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => $text));
                         }
                     }
