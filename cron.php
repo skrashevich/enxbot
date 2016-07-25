@@ -61,19 +61,22 @@ while($game = mysql_fetch_assoc($gameresult))
         }
     }
 
-    // Проверяем наличие таймера на АП
-    $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid']).' AND type=2';
-    $result = mysql_query($sql);
-
-    if(mysql_num_rows($result)>0)
+    if($array['UPsecs']>0)
     {
-        // Обновляем время АП на всякий случай
-        $sql="UPDATE timers SET time= ".(time()+$array['UPsecs'])." WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND type=2";
+        // Проверяем наличие таймера на АП
+        $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid']).' AND type=2';
         $result = mysql_query($sql);
-    } else {
-        // Добавляем АП в базу
-        $sql="INSERT INTO timers (game_id, level_id, hint, time, type) VALUES ($game[game_id], ".intval($array['levelid']).", 0, ".(time()+$array['UPsecs']).", 2)";
-        $result = mysql_query($sql);
+
+        if(mysql_num_rows($result)>0)
+        {
+            // Обновляем время АП на всякий случай
+            $sql="UPDATE timers SET time= ".(time()+$array['UPsecs'])." WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND type=2";
+            $result = mysql_query($sql);
+        } else {
+            // Добавляем АП в базу
+            $sql="INSERT INTO timers (game_id, level_id, hint, time, type) VALUES ($game[game_id], ".intval($array['levelid']).", 0, ".(time()+$array['UPsecs']).", 2)";
+            $result = mysql_query($sql);
+        }
     }
 
     // Обновляем текущий levelid в базе (на всякий случай)

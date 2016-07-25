@@ -43,5 +43,17 @@ while(true)
             mysql_query($sql);
         }
     }
+
+    // Смотрим в базе изменение ID уровня. Если поменялся, значит АП мимо бота и надо об этом сообщить.
+    $sql="SELECT last_level_id, chat_id, game_id FROM games WHERE status=1 AND last_level_id>0";
+    $result = mysql_query($sql);
+    while($row = mysql_fetch_assoc($result))
+    {
+        if( ($row['last_level_id'] != $levels[$row['game_id']]) && $levels[$row['game_id']])
+        {
+            apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'Markdown', "text" => "*АП* (по движку)"));
+        }
+        $levels[$row['game_id']]=$row['last_level_id'];
+    }
     sleep(1);
 }
