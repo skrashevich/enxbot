@@ -43,7 +43,7 @@ while($game = mysql_fetch_assoc($gameresult))
     if(mysql_num_rows($result)!=count($array['remains']))
     {
         print "Подсказки на игре $game[game_id] на уровне $array[levelid] обновились\n";
-        $sql="DELETE FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid']).' AND type=1';
+        $sql="DELETE FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid']).' AND type=1 AND ABS('.time().'-`time`)>60';
         mysql_query($sql);
 
         // Забиваем подсказки в базу заново
@@ -85,7 +85,7 @@ while($game = mysql_fetch_assoc($gameresult))
 // По всем играм - проверяем сколько осталось до подсказок и до АПа, шлём информацию
 //
 
-$sql = "SELECT timers.*,games.chat_id FROM timers, games WHERE games.last_level_id=timers.level_id AND games.status=1 AND timers.game_id = games.game_id";
+$sql = "SELECT timers.*,games.chat_id FROM timers, games WHERE games.last_level_id=timers.level_id AND games.status=1 AND timers.game_id = games.game_id AND timers.time >= ".time();
 $sqlresult = mysql_query($sql);
 while($timer = mysql_fetch_assoc($sqlresult))
 {
