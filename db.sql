@@ -60,3 +60,19 @@ CREATE TABLE `queue` (
   KEY `send_at` (`send_at`),
   KEY `parsed` (`parsed`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+
+
+# Дамп таблицы timers
+# ------------------------------------------------------------
+
+CREATE TABLE `timers` (
+  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
+  `game_id` int(5) unsigned DEFAULT NULL,
+  `level_id` int(11) DEFAULT NULL,
+  `hint` tinyint(1) unsigned DEFAULT NULL,
+  `time` int(11) unsigned DEFAULT NULL,
+  `type` tinyint(1) DEFAULT NULL COMMENT '1 - подскзка, 2 - АП',
+  PRIMARY KEY (`id`)
+) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+

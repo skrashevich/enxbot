@@ -109,13 +109,15 @@ function getHints($cookies,$domain,$gameid)
 
     // Вычленяем подсказки
 
-    preg_match_all('#<span class="color_dis"><b>Подсказка&nbsp;([0-9]+)</b>&nbsp;будет через&nbsp;<span class="bold_off color_dis" id="time[0-9]*">(.*)</span><script type="text/javascript">#',$response,$matches,PREG_SET_ORDER);
+    preg_match_all('#<span class="color_dis"><b>Подсказка&nbsp;([0-9]+)</b>&nbsp;будет через&nbsp;<span class="bold_off color_dis" id="time[0-9]*?">(.*?)</span><script type="text/javascript">.*?"StartCounter":([0-9]+),.*?</script>#ms',$response,$matches,PREG_SET_ORDER);
     foreach($matches as $match)
     {
       $hint = $match[1];
       $remain = $match[2];
+      $remain_sec = $match[3];
 
       $hints[$hint] = "До открытия $remain";
+      $remains[$hint] = $remain_sec;
     }
 
     preg_match_all('#<h3>Подсказка ([0-9]+)</h3>(.*?)</p>#sm',$response,$matches,PREG_SET_ORDER);
@@ -141,7 +143,31 @@ function getHints($cookies,$domain,$gameid)
       $result = 'Подсказок нет';
     }
 
-    return $result;
+    //
+    // Вычленяем время автоперехода
+    //
+
+    preg_match('#<strong>Автопереход</strong> на следующий уровень через&nbsp;<span class="bold_off timer" id="time[0-9]*">(.*?)</span><script type="text/javascript">.*?"StartCounter":([0-9]+),.*?</script>?#ms',$response,$matches);
+    if($matches)
+    {
+      $UPtime = $matches[1];
+      $UPsecs = $matches[2];
+    } else {
+      $UPsecs = 0;
+    }
+
+    // Вычленяем LevelId
+    preg_match('#<input type="hidden" name="LevelId" value="(\d+)" />#',$response,$matches);
+    $levelId = $matches[1];
+    if(!$levelId)
+      $levelId=-1;
+
+    $array['result'] = $result;
+    $array['remains'] = $remains;
+    $array['UPsecs'] = $UPsecs;
+    $array['levelid'] = $levelId;
+
+    return $array;
 }
 
 function sendCode($cookies,$domain,$gameid,$code)
@@ -196,7 +222,10 @@ function sendCode($cookies,$domain,$gameid,$code)
     if( preg_match('#<center class="gameCongratulation">(.*)</center>#ms', $response,$matches) )
     {
       $result = $purifier->purify($matches[1]);
-      return $result; // Если закончили игру, то всё не имеет смысла
+      $array['result'] = $result;
+      $array['levelid'] = '-1';
+
+      return $array; // Если закончили игру, то всё не имеет смысла
     }
 
     // Проверяем на АП
@@ -206,7 +235,10 @@ function sendCode($cookies,$domain,$gameid,$code)
     if($levelId != $matches[1])
     {
         $result .= "\n\nАП!";
-        return $result; // Если апнулись, то остальное не имеет смысла
+        $array['result'] = $result;
+        $array['levelid'] = $matches[1];
+
+        return $array; // Если апнулись, то остальное не имеет смысла
     }
 
     // Считаем сектора
@@ -222,7 +254,10 @@ function sendCode($cookies,$domain,$gameid,$code)
       $result .= " ($sectors_done/$sectors_total)";
     }
 
-    return $result;
+    $array['result'] = $result;
+    $array['levelid'] = $levelId;
+
+    return $array;
 }
 
 

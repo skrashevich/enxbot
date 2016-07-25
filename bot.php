@@ -216,7 +216,8 @@ if(isset($update["message"]))
                         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
                     } else 
                     {
-                        $hints = getHints($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
+                        $array = getHints($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
+                        $hints = $array['result'];
                         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "parse_mode" => 'Markdown', "text" => $hints));
                     }
                 break;
@@ -273,7 +274,13 @@ if(isset($update["message"]))
                 {
                     $result = "Не проходит авторизация на игровом движке";
                 } else {
-                    $result = sendCode($cookies,$settings["game_domain"],$settings["game_id"],$code);
+                    $array = sendCode($cookies,$settings["game_domain"],$settings["game_id"],$code);
+                    $result = $array['result'];
+
+                    $levelId = $array['levelid'];
+
+                    $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $chat_id";
+                    mysql_query($sql);
                 }
             }
             if(!$result)
