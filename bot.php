@@ -1,10 +1,6 @@
 <?php
 error_reporting(E_ALL & ~(E_STRICT|E_NOTICE));
 
-define('BOT_TOKEN', '***REMOVED-TOKEN***');
-define('API_URL', 'https://api.telegram.org/bot'.BOT_TOKEN.'/');
-define('WEBHOOK_URL', 'https://shtab.svk.su/enbot/bot.php');
-
 include('config.php');
 include('db.php');
 include('functions.php');
