@@ -77,7 +77,7 @@ while($game = mysql_fetch_assoc($gameresult))
     }
 
     // Обновляем текущий levelid в базе (на всякий случай)
-    $sql = "UPDATE timers SET level_id = ".intval($array['levelid'])." WHERE game_id = $game[game_id]";
+    $sql = "UPDATE games SET last_level_id = ".intval($array['levelid'])." WHERE game_id = $game[game_id]";
     mysql_query($sql);
 }
 
