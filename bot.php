@@ -194,7 +194,7 @@ if(isset($update["message"]))
 
                         // Ищем в тексте координаты
                         $levelTextClean = $purifier->purify($levelText);
-                        preg_match_all('#(.*?)[\s:,;\.](-?[1-8]?\d(?:\.\d{1,6})?|90(?:\.0{1,6})?)[,]?\s+(-?(?:1[0-7]|[1-9])?\d(?:\.\d{1,6})?|180(?:\.0{1,6})?)#', $levelTextClean, $matches, PREG_SET_ORDER);
+                        preg_match_all('#(.*?)[\s:,;\.](-?[1-8]?\d(?:\.\d{1,8})?|90(?:\.0{1,8})?)[,]?\s+(-?(?:1[0-7]|[1-9])?\d(?:\.\d{1,8})?|180(?:\.0{1,8})?)#', $levelTextClean, $matches, PREG_SET_ORDER);
                         foreach($matches as $match)
                         {
                             $text = $match[0];
