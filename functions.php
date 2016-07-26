@@ -52,7 +52,7 @@ function testGame($cookies,$domain,$gameid)
 {
   //
 
-  $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid);
+  $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru');
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_COOKIE, $cookies);
 
@@ -61,6 +61,11 @@ function testGame($cookies,$domain,$gameid)
     // close the connection, release resources used
     curl_close($ch);
 
+    // Если короткий ответ, значит это заглушка-перенаправление
+    if(strlen($response)<170)
+    {
+        return "У команды бота нет доступа к игре";
+    }
     // Вычленяем название игры
 
     preg_match('#<a href="/games/details/'.$gameid.'/">(.*)</a>#',$response,$matches);
