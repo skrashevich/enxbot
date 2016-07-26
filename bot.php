@@ -15,7 +15,7 @@ if (php_sapi_name() == 'cli') {
 $helptext = "Это бот для игры Encounter 
 Основная цель бота: пробитие кодов и оптимизация взаимодействия с движком.
 
-Настройка бота:
+*Настройка бота*:
 /game domain <domain> - задать домен
 /game login <login> - задать логин движка
 /game pass <pass> - задать пароль движка. Пароль задается в зашифрованном виде!
@@ -31,8 +31,7 @@ $helptext = "Это бот для игры Encounter
 
 /encrypt <пароль> - в личку боту! получить зашифрованный пароль для установки в канале
 
-Игровой процесс:
-
+*Игровой процесс*:
 /level - отобразить текст текущего уровня.
 \tБот попробует найти в тексте уровня координаты и выслать их в виде локации для упрощения построения маршрута.
 /hints - отобразить подсказки на уровне
@@ -100,7 +99,7 @@ if(isset($update["message"]))
             {
                 case '/help':
                 case '/start':
-                    apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => $helptext));
+                    apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'Markdown', "text" => $helptext));
                 break;
                 case '/game':
                     switch($args[0])
