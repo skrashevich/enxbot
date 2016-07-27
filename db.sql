@@ -22,6 +22,7 @@ CREATE TABLE `games` (
   `cookies` text,
   `last_level_id` int(11) DEFAULT NULL,
   `status` tinyint(1) unsigned DEFAULT NULL,
+  `payment` smallint(5) unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 

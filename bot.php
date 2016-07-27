@@ -12,6 +12,10 @@ define('API_URL', 'https://api.telegram.org/bot'.BOT_TOKEN.'/');
 define('ENCRYPTION_KEY', 'ключ');
 define('BOT_USERNAME', 'имя бота без собаки');
 define('ADMIN_USERNAME', 'юзернейм главного администратора без собаки');
+define('YANDEX_ACCOUNT_NUMBER', 'номер яндекс кошелька для приема денег');
+define('YANDEX_ACCOUNT_SECRET', 'Секретное слово');
+define('YANDEX_ACCESS_TOKEN', 'токен авторизации приложения');
+define('PAYMENT_SUM', 'стоимость игры в рублях');
 */
 
 
@@ -163,37 +167,44 @@ if(isset($update["message"]))
                             apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result ? $result : 'Ошибка'));
                         break;
                         case 'start':
-                            if(!in_array($message['from']['username'], $settings['admins']))
+                            if(in_array($message['from']['username'], $settings['admins']) || $settings['payment']>=PAYMENT_SUM)
                             {
-                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "У вас недостаточно прав для старта игры"));
+                                if(PAYMENT_SUM>=0)
+                                {
+                                    $sql = "UPDATE games SET status = 1 WHERE chat_id = $chat_id";
+                                    mysql_query($sql);
+                                    apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Игра привязана к чату"));
+                                } else {
+                                    apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "У вас нет прав для запуска игры."));
+                                }
                             } else {
-                                $sql = "UPDATE games SET status = 1 WHERE chat_id = $chat_id";
-                                mysql_query($sql);
-                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Игра привязана к чату"));
+                                $paykey = urlencode(encrypt("$chat_id|$settings[game_id]", ENCRYPTION_KEY));
+                                $text = "Игра в данном чате не оплачена.\nДля оплаты перейдите по ссылке: <a href=\"https://money.yandex.ru/embed/shop.xml?account=".YANDEX_ACCOUNT_NUMBER."&quickpay=shop&payment-type-choice=on&mobile-payment-type-choice=on&writer=seller&targets=$paykey&targets-hint=&default-sum=".PAYMENT_SUM."&button-text=01&successURL=\">Оплатить</a>\n\nСтоимость игры: <b>".PAYMENT_SUM."</b> руб. После успешной оплаты в чат придет уведомление о возможности начала игры. Есть возможность платить по частям, в таком случае бот начнет работать как только наберется необходимая сумма.\nТекущий баланс: <b>$settings[payment]</b> руб.\n\nУбедитесь, что ID игры задан корректно. Вы не сможете его поменять.";
+                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'HTML', "reply_to_message_id" => $message_id, "text" => $text));
                             }
                         break;
                         case 'stop':
-                            if(!in_array($message['from']['username'], $settings['admins']))
-                            {
-                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "У вас недостаточно прав для остановки бота"));
-                            } else 
+                            if(in_array($message['from']['username'], $settings['admins']) || PAYMENT_SUM>=0)
                             {
                                 $sql = "UPDATE games SET status = 0 WHERE chat_id = $chat_id";
                                 mysql_query($sql);
                                 apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Бот остановлен"));
+                            } else 
+                            {
+                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "У вас недостаточно прав для остановки бота"));
                             }
                         break;
                         case 'delete':
-                            if(!in_array($message['from']['username'], $settings['admins']))
-                            {
-                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "У вас недостаточно прав для остановки бота"));
-                            } else 
+                            if(in_array($message['from']['username'], $settings['admins']) || PAYMENT_SUM>=0)
                             {
                                 $sql="DELETE FROM games WHERE chat_id = $chat_id";
                                 mysql_query($sql);
                                 $sql="DELETE FROM timers WHERE chat_id = $chat_id";
                                 mysql_query($sql);
                                 apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Настройки игры удалены"));
+                            } else 
+                            {
+                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "У вас недостаточно прав для остановки бота"));
                             }
                         break;
                         case 'print':
