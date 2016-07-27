@@ -21,7 +21,6 @@ while(true)
     $sqlresult = mysql_query($sql);
     while($timer = mysql_fetch_assoc($sqlresult))
     {
-        var_dump($timer);
         $secs = time()-$timer['time'];
         if($secs >= 2)
         {
