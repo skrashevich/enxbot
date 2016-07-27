@@ -208,7 +208,7 @@ if(isset($update["message"]))
                             }
                         break;
                         case 'print':
-                            $text = "Домен: $settings[game_domain]\nИгра $settings[game_id]\nСтатус $settings[status]\nЛогин $settings[game_login]\nПароль ".($settings['game_pass'] ? 'задан' : 'не задан').(PAYMENT_SUM > 0 ? "\nВнесено денег: $settings[payment]\nСтоимость игры: ".PAYMENT_SUM : '');
+                            $text = "Домен: $settings[game_domain]\nИгра $settings[game_id]\nСтатус $settings[status]\nЛогин $settings[game_login]\nПароль ".($settings['game_pass'] ? 'задан' : 'не задан').(PAYMENT_SUM > 0 ? "\nВнесено денег: $settings[payment]\nСтоимость бота: ".PAYMENT_SUM : '');
                             apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => $text));
                         break;
                     }
