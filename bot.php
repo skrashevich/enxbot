@@ -114,14 +114,24 @@ if(isset($update["message"]))
                     switch($args[0])
                     {
                         case 'domain':
-                            $sql = "UPDATE games SET game_domain = 'm.".mysql_escape_string($args[1])."' WHERE chat_id = $chat_id";
-                            mysql_query($sql);
-                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Установлен домен $args[1]"));
+                            if($settings['status']==0)
+                            {
+                                $sql = "UPDATE games SET game_domain = 'm.".mysql_escape_string($args[1])."' WHERE chat_id = $chat_id";
+                                mysql_query($sql);
+                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Установлен домен $args[1]"));
+                            } else {
+                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Невозможно поменять домен в процессе игры. Остановите бота командой /game stop"));
+                            }
                         break;
                         case 'id':
-                            $sql = "UPDATE games SET game_id = ".intval($args[1])." WHERE chat_id = $chat_id";
-                            mysql_query($sql);
-                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Установлен ID игры $args[1]"));
+                            if($settings['game_id']==0)
+                            {
+                                $sql = "UPDATE games SET game_id = ".intval($args[1])." WHERE chat_id = $chat_id";
+                                mysql_query($sql);
+                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Установлен ID игры $args[1]"));
+                            } else {
+                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Невозможно поменять ID игры после создания. Воспользуйтесь командой /game delete для удаления прошлой игры в данном чате."));
+                            }
                         break;
                         case 'login':
                             $sql = "UPDATE games SET game_login= '".mysql_escape_string($args[1])."' WHERE chat_id = $chat_id";
@@ -170,7 +180,7 @@ if(isset($update["message"]))
                             {
                                 $sql = "UPDATE games SET status = 0 WHERE chat_id = $chat_id";
                                 mysql_query($sql);
-                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Игра отвязана от чата"));
+                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Бот остановлен"));
                             }
                         break;
                         case 'delete':
@@ -179,7 +189,10 @@ if(isset($update["message"]))
                                 apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "У вас недостаточно прав для остановки бота"));
                             } else 
                             {
-                                $settings = Array();
+                                $sql="DELETE FROM games WHERE chat_id = $chat_id";
+                                mysql_query($sql);
+                                $sql="DELETE FROM timers WHERE chat_id = $chat_id";
+                                mysql_query($sql);
                                 apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Настройки игры удалены"));
                             }
                         break;
@@ -191,7 +204,7 @@ if(isset($update["message"]))
                 case '/level':
                     if(!$settings['status'])
                     {
-                        $result = "В данном чате бот недоступен";
+                        $result = "Нет активной игры";
                         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
                     } else 
                     {
@@ -224,7 +237,7 @@ if(isset($update["message"]))
                 case '/hints':
                     if(!$settings['status'])
                     {
-                        $result = "В данном чате бот недоступен";
+                        $result = "Нет активной игры";
                         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
                     } else 
                     {
@@ -266,7 +279,7 @@ if(isset($update["message"]))
         {
             if(!$settings['status'])
             {
-                $result = "В данном чате бот недоступен";
+                $result = "Нет активной игры";
             } else 
             {
                 $code=substr($text,1);
