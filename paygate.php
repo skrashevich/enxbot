@@ -34,8 +34,6 @@ curl_setopt($ch, CURLOPT_HTTPHEADER, Array('Authorization: Bearer '.YANDEX_ACCES
 $response = curl_exec($ch);
 curl_close($ch);
 
-file_put_contents('log.txt', $response, FILE_APPEND);
-
 $return = json_decode($response, true);
 
 $message = decrypt($return['message'], ENCRYPTION_KEY);
