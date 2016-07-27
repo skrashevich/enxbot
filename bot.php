@@ -167,9 +167,9 @@ if(isset($update["message"]))
                             apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result ? $result : 'Ошибка'));
                         break;
                         case 'start':
-                            if(in_array($message['from']['username'], $settings['admins']) || $settings['payment']>=PAYMENT_SUM)
+                            if($settings['payment']>=PAYMENT_SUM)
                             {
-                                if(PAYMENT_SUM>=0)
+                                if(in_array($message['from']['username'], $settings['admins']) && PAYMENT_SUM<0)
                                 {
                                     $sql = "UPDATE games SET status = 1 WHERE chat_id = $chat_id";
                                     mysql_query($sql);
@@ -184,7 +184,7 @@ if(isset($update["message"]))
                             }
                         break;
                         case 'stop':
-                            if(in_array($message['from']['username'], $settings['admins']) || PAYMENT_SUM>=0)
+                            if(in_array($message['from']['username'], $settings['admins']) && PAYMENT_SUM<0)
                             {
                                 $sql = "UPDATE games SET status = 0 WHERE chat_id = $chat_id";
                                 mysql_query($sql);
@@ -195,7 +195,7 @@ if(isset($update["message"]))
                             }
                         break;
                         case 'delete':
-                            if(in_array($message['from']['username'], $settings['admins']) || PAYMENT_SUM>=0)
+                            if(in_array($message['from']['username'], $settings['admins']) && PAYMENT_SUM<0)
                             {
                                 $sql="DELETE FROM games WHERE chat_id = $chat_id";
                                 mysql_query($sql);

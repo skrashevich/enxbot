@@ -49,11 +49,11 @@ while(true)
     $result = mysql_query($sql);
     while($row = mysql_fetch_assoc($result))
     {
-        if( ($row['last_level_id'] != $levels[$row['game_id']]) && $levels[$row['game_id']])
+        if( ($row['last_level_id'] != $levels[$row['chat_id']]) && $levels[$row['chat_id']])
         {
             apiRequestJSON("sendMessage", array('chat_id' => $row['chat_id'], "parse_mode" => 'Markdown', "text" => "*АП* (по движку)"));
         }
-        $levels[$row['game_id']]=$row['last_level_id'];
+        $levels[$row['chat_id']]=$row['last_level_id'];
     }
     sleep(1);
 }

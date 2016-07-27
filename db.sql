@@ -20,7 +20,7 @@ CREATE TABLE `games` (
   `game_login` varchar(255) DEFAULT NULL,
   `game_pass` varchar(255) DEFAULT NULL,
   `cookies` text,
-  `last_level_id` int(11) DEFAULT NULL,
+  `last_level_id` int(11) NOT NULL DEFAULT '0',
   `status` tinyint(1) unsigned DEFAULT NULL,
   `payment` smallint(5) unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`id`)

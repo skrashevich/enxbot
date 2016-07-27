@@ -38,12 +38,12 @@ while($game = mysql_fetch_assoc($gameresult))
     $array = getHints($game['cookies'],$game["game_domain"],$game["game_id"]);
     
     // Смотрим, есть ли уже таймеры на подсказки
-    $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid']).' AND chat_id = $game[chat_id] AND type=1';
+    $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=1";
     $result = mysql_query($sql);
     if(mysql_num_rows($result)!=count($array['remains']))
     {
         print "Подсказки на игре $game[game_id] на уровне $array[levelid] обновились\n";
-        $sql="DELETE FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid']).' AND chat_id = $game[chat_id] AND type=1 AND ABS('.time().'-`time`)>60';
+        $sql="DELETE FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=1 AND ABS('.time().'-`time`)>60";
         mysql_query($sql);
 
         // Забиваем подсказки в базу заново
@@ -64,7 +64,7 @@ while($game = mysql_fetch_assoc($gameresult))
     if($array['UPsecs']>0)
     {
         // Проверяем наличие таймера на АП
-        $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid']).' AND chat_id = $game[chat_id] AND type=2';
+        $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=2";
         $result = mysql_query($sql);
 
         if(mysql_num_rows($result)>0)
@@ -120,5 +120,5 @@ while($timer = mysql_fetch_assoc($sqlresult))
 //
 // Удаляем таймеры, просроченные более чем на 1 час
 //
-$sql = "DELETE FROM timers WHERE ".time()." - `time` > 60*60";
+$sql = "DELETE FROM timers WHERE ".time()." > time+60*60";
 mysql_query($sql);
