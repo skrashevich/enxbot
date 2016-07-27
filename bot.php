@@ -11,6 +11,7 @@ define('WEBHOOK_URL', 'URL');
 define('API_URL', 'https://api.telegram.org/bot'.BOT_TOKEN.'/');
 define('ENCRYPTION_KEY', 'ключ');
 define('BOT_USERNAME', 'имя бота без собаки');
+define('ADMIN_USERNAME', 'юзернейм главного администратора без собаки');
 */
 
 
@@ -233,7 +234,7 @@ if(isset($update["message"]))
                     }
                 break;
                 case '/admin':
-                    if($message['from']['username'] == 'skrashevich')
+                    if($message['from']['username'] == ADMIN_USERNAME)
                     {
                         switch($args[0])
                         {
