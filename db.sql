@@ -68,6 +68,7 @@ CREATE TABLE `queue` (
 
 CREATE TABLE `timers` (
   `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
+  `chat_id` int(11) DEFAULT NULL,
   `game_id` int(5) unsigned DEFAULT NULL,
   `level_id` int(11) DEFAULT NULL,
   `hint` tinyint(1) unsigned DEFAULT NULL,

@@ -27,7 +27,7 @@ while($game = mysql_fetch_assoc($gameresult))
             $result = "Не проходит авторизация на игровом движке";
         } else {
             $result = "Авторизация успешно пройдена";
-            $sql = "UPDATE games SET cookies = '".mysql_escape_string($cookies)."' WHERE chat_id = $chat_id";
+            $sql = "UPDATE games SET cookies = '".mysql_escape_string($cookies)."' WHERE chat_id = $game[chat_id] AND game_id = $game[game_id]";
             mysql_query($sql);
         }
     }
@@ -38,25 +38,25 @@ while($game = mysql_fetch_assoc($gameresult))
     $array = getHints($game['cookies'],$game["game_domain"],$game["game_id"]);
     
     // Смотрим, есть ли уже таймеры на подсказки
-    $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid']).' AND type=1';
+    $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid']).' AND chat_id = $game[chat_id] AND type=1';
     $result = mysql_query($sql);
     if(mysql_num_rows($result)!=count($array['remains']))
     {
         print "Подсказки на игре $game[game_id] на уровне $array[levelid] обновились\n";
-        $sql="DELETE FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid']).' AND type=1 AND ABS('.time().'-`time`)>60';
+        $sql="DELETE FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid']).' AND chat_id = $game[chat_id] AND type=1 AND ABS('.time().'-`time`)>60';
         mysql_query($sql);
 
         // Забиваем подсказки в базу заново
         foreach($array['remains'] as $hint=>$secs)
         {
-            $sql="INSERT INTO timers (game_id, level_id, hint, time, type) VALUES ($game[game_id], ".intval($array['levelid']).", $hint, ".(time()+$secs).", 1)";
+            $sql="INSERT INTO timers (game_id, chat_id, level_id, hint, time, type) VALUES ($game[game_id], $game[chat_id], ".intval($array['levelid']).", $hint, ".(time()+$secs).", 1)";
             $result = mysql_query($sql);
         }
     } else {
         // Обновляем подсказки в базе на всякий случай
         foreach($array['remains'] as $hint=>$secs)
         {
-            $sql="UPDATE timers SET time= ".(time()+$secs)." WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND hint=$hint";
+            $sql="UPDATE timers SET time= ".(time()+$secs)." WHERE game_id = $game[game_id] AND chat_id = $game[chat_id] AND level_id = ".intval($array['levelid'])." AND hint=$hint";
             $result = mysql_query($sql);
         }
     }
@@ -64,23 +64,23 @@ while($game = mysql_fetch_assoc($gameresult))
     if($array['UPsecs']>0)
     {
         // Проверяем наличие таймера на АП
-        $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid']).' AND type=2';
+        $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid']).' AND chat_id = $game[chat_id] AND type=2';
         $result = mysql_query($sql);
 
         if(mysql_num_rows($result)>0)
         {
             // Обновляем время АП на всякий случай
-            $sql="UPDATE timers SET time= ".(time()+$array['UPsecs'])." WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND type=2";
+            $sql="UPDATE timers SET time= ".(time()+$array['UPsecs'])." WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=2";
             $result = mysql_query($sql);
         } else {
             // Добавляем АП в базу
-            $sql="INSERT INTO timers (game_id, level_id, hint, time, type) VALUES ($game[game_id], ".intval($array['levelid']).", 0, ".(time()+$array['UPsecs']).", 2)";
+            $sql="INSERT INTO timers (game_id, chat_id, level_id, hint, time, type) VALUES ($game[game_id], $game[chat_id], ".intval($array['levelid']).", 0, ".(time()+$array['UPsecs']).", 2)";
             $result = mysql_query($sql);
         }
     }
 
     // Обновляем текущий levelid в базе (на всякий случай)
-    $sql = "UPDATE games SET last_level_id = ".intval($array['levelid'])." WHERE game_id = $game[game_id]";
+    $sql = "UPDATE games SET last_level_id = ".intval($array['levelid'])." WHERE game_id = $game[game_id] AND chat_id = $game[chat_id]";
     mysql_query($sql);
 }
 
@@ -88,7 +88,7 @@ while($game = mysql_fetch_assoc($gameresult))
 // По всем играм - проверяем сколько осталось до подсказок и до АПа, шлём информацию
 //
 
-$sql = "SELECT timers.*,games.chat_id FROM timers, games WHERE games.last_level_id=timers.level_id AND games.status=1 AND timers.game_id = games.game_id AND timers.time >= ".time();
+$sql = "SELECT timers.* FROM timers, games WHERE games.last_level_id=timers.level_id AND games.status=1 AND timers.game_id = games.game_id AND games.chat_id = timers.chat_id AND timers.time >= ".time();
 $sqlresult = mysql_query($sql);
 while($timer = mysql_fetch_assoc($sqlresult))
 {

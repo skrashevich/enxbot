@@ -16,6 +16,7 @@ while(true)
             FROM timers, games
             WHERE games.last_level_id=timers.level_id
             AND games.status=1
+            AND games.chat_id = timers.chat_id
             AND timers.game_id = games.game_id
             AND timers.time <= ".time();
     $sqlresult = mysql_query($sql);
