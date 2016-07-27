@@ -5,6 +5,13 @@ include('config.php');
 include('db.php');
 include('functions.php');
 
+/* config.php :
+define('BOT_TOKEN', 'токен');
+define('WEBHOOK_URL', 'URL');
+define('API_URL', 'https://api.telegram.org/bot'.BOT_TOKEN.'/');
+define('ENCRYPTION_KEY', 'ключ');
+*/
+
 
 // if run from console, set or delete webhook
 if (php_sapi_name() == 'cli') {
@@ -120,7 +127,7 @@ if(isset($update["message"]))
                             apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Установлен игровой логин $args[1]"));
                         break;
                         case 'pass':
-                            $clear_pass = decrypt($args[1], 'Cjhjrnsczxj,tpmzyd;jgeceyekb,fyfy');
+                            $clear_pass = decrypt($args[1], ENCRYPTION_KEY);
                             $clear_pass = trim($clear_pass);
                             $sql = "UPDATE games SET game_pass = '".mysql_escape_string($clear_pass)."' WHERE chat_id = $chat_id";
                             mysql_query($sql);
@@ -209,7 +216,7 @@ if(isset($update["message"]))
 
                 break;
                 case '/encrypt':
-                    $result = encrypt($args[0], 'Cjhjrnsczxj,tpmzyd;jgeceyekb,fyfy');
+                    $result = encrypt($args[0], ENCRYPTION_KEY);
                     apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Зашифрованный пароль: $result"));
                 break;
                 case '/hints':
