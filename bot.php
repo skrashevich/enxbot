@@ -38,9 +38,9 @@ $helptext = "Это бот для игры Encounter
 /game test - проверить подключение к игре
 /game print - вывод настроек
 
-/game start - старт бота (только администратор)
-/game stop - остановка бота (только администратор)
-/game delete - удалить все настройки игры в канале (только администратор)
+/game start - старт бота
+/game stop - остановка бота 
+/game delete - удалить все настройки игры в канале".(PAYMENT_SUM>0 ? ', *включая информацию о внесенных средствах*' : '')."
 
 /encrypt <пароль> - в личку боту! получить зашифрованный пароль для установки в канале
 
@@ -179,7 +179,7 @@ if(isset($update["message"]))
                                 }
                             } else {
                                 $paykey = urlencode(encrypt("$chat_id|$settings[game_id]", ENCRYPTION_KEY));
-                                $text = "Игра в данном чате не оплачена.\nДля оплаты перейдите по ссылке: <a href=\"https://money.yandex.ru/embed/shop.xml?account=".YANDEX_ACCOUNT_NUMBER."&quickpay=shop&payment-type-choice=on&mobile-payment-type-choice=on&writer=seller&targets=$paykey&targets-hint=&default-sum=".PAYMENT_SUM."&button-text=01&successURL=\">Оплатить</a>\n\nСтоимость игры: <b>".PAYMENT_SUM."</b> руб. После успешной оплаты в чат придет уведомление о возможности начала игры. Есть возможность платить по частям, в таком случае бот начнет работать как только наберется необходимая сумма.\nТекущий баланс: <b>$settings[payment]</b> руб.\n\nУбедитесь, что ID игры задан корректно. Вы не сможете его поменять.";
+                                $text = "Услуги бота в данном чате не оплачены.\nДля оплаты перейдите по ссылке: <a href=\"https://money.yandex.ru/embed/shop.xml?account=".YANDEX_ACCOUNT_NUMBER."&quickpay=shop&payment-type-choice=on&mobile-payment-type-choice=on&writer=seller&targets=$paykey&targets-hint=&default-sum=".PAYMENT_SUM."&button-text=01&successURL=\">Оплатить</a>\n\nСтоимость бота: <b>".PAYMENT_SUM."</b> руб. После успешной оплаты в чат придет уведомление о возможности запуска бота. Есть возможность платить по частям, в таком случае бот начнет работать как только наберется необходимая сумма.\nТекущий баланс: <b>$settings[payment]</b> руб.\n\nУбедитесь, что ID игры задан корректно. Вы не сможете его поменять.";
                                 apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'HTML', "reply_to_message_id" => $message_id, "text" => $text));
                             }
                         break;
