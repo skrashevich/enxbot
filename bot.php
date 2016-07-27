@@ -10,6 +10,7 @@ define('BOT_TOKEN', 'токен');
 define('WEBHOOK_URL', 'URL');
 define('API_URL', 'https://api.telegram.org/bot'.BOT_TOKEN.'/');
 define('ENCRYPTION_KEY', 'ключ');
+define('BOT_USERNAME', 'имя бота без собаки');
 */
 
 
@@ -100,7 +101,7 @@ if(isset($update["message"]))
             $args = explode(' ', $args);
 
             // for commands like /level@enxbot
-            $command = str_replace('@enxbot', '', $command);
+            $command = str_replace('@'.BOT_USERNAME, '', $command);
 
             switch($command)
             {
