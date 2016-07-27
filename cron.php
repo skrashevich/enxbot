@@ -116,3 +116,9 @@ while($timer = mysql_fetch_assoc($sqlresult))
         apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'Markdown', "text" => "*$text*"));
     }
 }
+
+//
+// Удаляем таймеры, просроченные более чем на 1 час
+//
+$sql = "DELETE FROM timers WHERE ".time()." - `time` > 60*60";
+mysql_query($sql);
