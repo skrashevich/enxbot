@@ -39,6 +39,9 @@ $return = json_decode($response, true);
 $message = decrypt($return['message'], ENCRYPTION_KEY);
 list($chat_id, $game_id) = explode('|', $message, 2);
 
+$chat_id = mysql_escape_string($chat_id);
+$game_id = intval($game_id);
+
 $sql = "SELECT payment FROM games WHERE chat_id = $chat_id AND game_id = $game_id";
 $result = mysql_query($sql);
 $row = mysql_fetch_assoc($result);
