@@ -222,22 +222,21 @@ if(isset($update["message"]))
                     {
                         $levelText = getLevelText($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
 
-                        $result = $levelText;
-                        $result_clean = $purifier->purify($result);
-                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result ? $result_clean : 'Ошибка'));
+                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "parse_mode" => 'HTML', "text" => $levelText ? $levelText : 'Ошибка'));
 
                         // Ищем в тексте координаты
-                        $levelTextClean = $purifier->purify($levelText);
-                        preg_match_all('#(.*?)[\s:,;\.](-?[1-8]?\d(?:\.\d{1,8})?|90(?:\.0{1,8})?)[,]?\s*?(-?(?:1[0-7]|[1-9])?\d(?:\.\d{1,8})?|180(?:\.0{1,8})?)#', $levelTextClean, $matches, PREG_SET_ORDER);
-                        foreach($matches as $match)
+                        $coords = getCoordsFromText($levelText);
+                        foreach($coords as $match)
                         {
-                            $text = $match[0];
-                            $lat = $match[2];
-                            $lon = $match[3];
+                            $text = $match['text'];
+                            $lat = $match['lat'];
+                            $lon = $match['lon'];
+
+                            $address = $match['address'];
 
                             apiRequestJSON("sendLocation", array('chat_id' => $chat_id, "latitude" => $lat, "longitude" => $lon));
                             apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => "$lat $lon"));
-                            //apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => $text));
+                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => $address));
                         }
                     }
 
@@ -292,6 +291,7 @@ if(isset($update["message"]))
             if(!$settings['status'])
             {
                 $result = "Нет активной игры";
+                apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
             } else 
             {
                 $code=substr($text,1);
@@ -310,19 +310,23 @@ if(isset($update["message"]))
                 if($cookies===false)
                 {
                     $result = "Не проходит авторизация на игровом движке";
+                    apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
                 } else {
                     $array = sendCode($cookies,$settings["game_domain"],$settings["game_id"],$code);
                     $result = $array['result'];
 
-                    $levelId = $array['levelid'];
+                    apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
 
+                    $levelId = $array['levelid'];
                     $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $chat_id";
                     mysql_query($sql);
                 }
             }
             if(!$result)
+            {
                 $result = "Ошибка";
-            apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
+                apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
+            }
         }
     }
 }

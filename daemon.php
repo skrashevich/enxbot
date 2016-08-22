@@ -12,7 +12,7 @@ if (php_sapi_name() != 'cli') {
 
 while(true)
 {
-    $sql = "SELECT timers.*,games.chat_id,games.cookies,games.game_domain,games.game_id
+    $sql = "SELECT timers.*,games.chat_id,games.cookies,games.game_domain,games.game_id,games.cookies
             FROM timers, games
             WHERE games.last_level_id=timers.level_id
             AND games.status=1
@@ -34,6 +34,27 @@ while(true)
                 break;
                 case 2:
                     apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'Markdown', "text" => "*АП*"));
+                    // Получаем текст нового уровня и выдаем его в чат
+                    $levelText = getLevelText($timer['cookies'],$timer["game_domain"],$timer["game_id"]);
+
+                    apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'HTML', "text" => $levelText ? $levelText : 'Ошибка получения текста уровня'));
+
+                    $coords = getCoordsFromText($levelText);
+                    foreach($coords as $match)
+                    {
+                        $text = $match['text'];
+                        $lat = $match['lat'];
+                        $lon = $match['lon'];
+
+                        apiRequestJSON("sendLocation", array('chat_id' => $timer['chat_id'], "latitude" => $lat, "longitude" => $lon));
+                        apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "text" => "$lat $lon"));
+                    }
+
+                    // Обновляем LevelID в базе
+                    $array = getHints($game['cookies'],$game["game_domain"],$game["game_id"]);
+                    $levelId = $array['levelid'];
+                    $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $chat_id";
+                    mysql_query($sql);
                 break;
                 default:
                     apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'Markdown', "text" => "*Что-то обновилось*"));
@@ -45,13 +66,28 @@ while(true)
     }
 
     // Смотрим в базе изменение ID уровня. Если поменялся, значит АП мимо бота и надо об этом сообщить.
-    $sql="SELECT last_level_id, chat_id, game_id FROM games WHERE status=1 AND last_level_id>0";
+    $sql="SELECT * FROM games WHERE status=1 AND last_level_id>0";
     $result = mysql_query($sql);
     while($row = mysql_fetch_assoc($result))
     {
         if( ($row['last_level_id'] != $levels[$row['chat_id']]) && $levels[$row['chat_id']])
         {
             apiRequestJSON("sendMessage", array('chat_id' => $row['chat_id'], "parse_mode" => 'Markdown', "text" => "*АП* (по движку)"));
+            // Получаем текст нового уровня и выдаем его в чат
+            $levelText = getLevelText($row['cookies'],$row["game_domain"],$row["game_id"]);
+
+            apiRequestJSON("sendMessage", array('chat_id' => $row['chat_id'], "parse_mode" => 'HTML', "text" => $levelText ? $levelText : 'Ошибка получения текста уровня'));
+
+            $coords = getCoordsFromText($levelText);
+            foreach($coords as $match)
+            {
+                $text = $match['text'];
+                $lat = $match['lat'];
+                $lon = $match['lon'];
+
+                apiRequestJSON("sendLocation", array('chat_id' => $row['chat_id'], "latitude" => $lat, "longitude" => $lon));
+                apiRequestJSON("sendMessage", array('chat_id' => $row['chat_id'], "text" => "$lat $lon"));
+            }
         }
         $levels[$row['chat_id']]=$row['last_level_id'];
     }

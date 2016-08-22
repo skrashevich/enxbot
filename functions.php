@@ -77,7 +77,7 @@ function testGame($cookies,$domain,$gameid)
 
 function getLevelText($cookies,$domain,$gameid)
 {
-  //
+  global $purifier;
 
   $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru');
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -94,7 +94,15 @@ function getLevelText($cookies,$domain,$gameid)
 
     $levelText = $matches[1];
 
-    return $levelText;
+    preg_match('#<h2>Уровень <span>(\d+)</span> из (\d+)</h2>#', $response, $matches);
+    $levelNum = $matches[1];
+    $levelTotal = $matches[2];
+
+    $text_clean = $purifier->purify($levelText);
+    
+    $result = "<b>Уровень $levelNum из $levelTotal</b>\n$text_clean";
+
+    return $result;
 }
 
 function getHints($cookies,$domain,$gameid)
@@ -229,6 +237,7 @@ function sendCode($cookies,$domain,$gameid,$code)
       $result = $purifier->purify($matches[1]);
       $array['result'] = $result;
       $array['levelid'] = '-1';
+      $array['UP'] = false;
 
       return $array; // Если закончили игру, то всё не имеет смысла
     }
@@ -239,9 +248,9 @@ function sendCode($cookies,$domain,$gameid,$code)
 
     if($levelId != $matches[1])
     {
-        $result .= "\n\nАП!";
         $array['result'] = $result;
         $array['levelid'] = $matches[1];
+        $array['UP'] = true;
 
         return $array; // Если апнулись, то остальное не имеет смысла
     }
@@ -261,8 +270,35 @@ function sendCode($cookies,$domain,$gameid,$code)
 
     $array['result'] = $result;
     $array['levelid'] = $levelId;
+    $array['UP'] = false;
 
     return $array;
+}
+
+function getCoordsFromText($text)
+{
+  global $purifier;
+  $result = Array();
+   // Ищем в тексте координаты
+   $levelTextClean = $purifier->purify($text);
+   preg_match_all('#(.*?)[\s:,;\.](-?[1-8]?\d(?:\.\d{1,8})?|90(?:\.0{1,8})?)[,\s]+?(-?(?:1[0-7]|[1-9])?\d(?:\.\d{1,8})?|180(?:\.0{1,8})?)#', $levelTextClean, $matches, PREG_SET_ORDER);
+   foreach($matches as $match)
+   {
+    $text = $match[0];
+    $lat = $match[2];
+    $lon = $match[3];
+
+    // Геокодирование адреса
+    $url = "https://geocode-maps.yandex.ru/1.x/?format=json&sco=latlong&geocode=$lat,$lon";
+    $geocoder = file_get_contents($url);
+    $geodata = json_decode($geocoder, true);
+                        
+    $address = $geodata['response']['GeoObjectCollection']['featureMember'][0]['GeoObject']['metaDataProperty']['GeocoderMetaData']['text'];
+
+    $result[] = Array('lat' => $lat, 'lon' => $lon, 'text' => $text, 'address' => $address);
+   }
+
+   return $result;
 }
 
 
