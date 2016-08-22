@@ -274,7 +274,6 @@ function sendCode($cookies,$domain,$gameid,$code)
 
     return $array;
 }
-
 function getSectors($cookies,$domain,$gameid)
 {
     $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid);
@@ -309,6 +308,40 @@ function getSectors($cookies,$domain,$gameid)
     return $result;
 }
 
+function getMessages($cookies,$domain,$gameid)
+{
+    global $purifier;
+
+    $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_COOKIE, $cookies);
+
+    $response = curl_exec($ch);
+
+    // close the connection, release resources used
+    curl_close($ch);
+
+    // Получаем сообщения
+    preg_match('#<p class="globalmess">(.*?)</p>#ms',$response, $matches);
+    
+    if($matches) // Если есть результаты - значит на уровне есть сектора
+    {
+      $messages = $matches[1];
+
+      $messages = explode('<br />', $messages);
+
+      for($i=0;$i<count($messages);$i++)
+      {
+        $messages[$i] = $purifier->purify($messages[$i]);
+      }
+    } else
+    {
+      $messages = Array('Нет сообщений организатора');
+    }
+
+    return $messages;
+}
+
 function getCoordsFromText($text)
 {
   global $purifier;
@@ -334,6 +367,7 @@ function getCoordsFromText($text)
 
    return $result;
 }
+
 
 
 

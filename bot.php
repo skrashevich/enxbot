@@ -29,30 +29,33 @@ $helptext = "Это бот для игры Encounter
 Основная цель бота: пробитие кодов и оптимизация взаимодействия с движком.
 
 *Настройка бота*:
-/game domain <domain> - задать домен
-/game login <login> - задать логин движка
-/game pass <pass> - задать пароль движка. Пароль задается в зашифрованном виде!
-/game id <id> - ID игры (из адресной строки!)
-
+Для начала использования, последовательно вводите данные команды в игровом чате:
+/game domain _домен_ - задать домен
+/game login _логин_ - задать логин движка
+/game pass _пароль_ - задать пароль движка. Пароль задается в зашифрованном виде! (см команду /encrypt)
+/game id _id_ - ID игры (из адресной строки!)
 /game auth - авторизоваться на движке
+/game start - старт бота
+
+*Другие команды*:
 /game test - проверить подключение к игре
 /game print - вывод настроек
-
-/game start - старт бота
 /game stop - остановка бота 
 /game delete - удалить все настройки игры в канале".(PAYMENT_SUM>0 ? ', *включая информацию о внесенных средствах*' : '')."
 
-/encrypt <пароль> - в личку боту! получить зашифрованный пароль для установки в канале
+/encrypt _пароль_ - в личку боту! получить зашифрованный пароль для установки в канале
 
 *Игровой процесс*:
 /level - отобразить текст текущего уровня.
 \tБот попробует найти в тексте уровня координаты и выслать их в виде локации для упрощения построения маршрута.
 /hints - отобразить подсказки на уровне
 /sectors - отобразить сектора уровня
+/messages - отобразить сообщения организатора
 
+*Пробитие кодов*
 Коды пробивать с префиксом & либо #
-Например: &en123
-После кода можно ввести комментарий, например: &en123//3 этаж
+Например: _&en123_
+После кода можно ввести комментарий, например: _&en123//3 этаж_
 В движок пойдет всё до символов //, в данном случае en123.
 
 Бот уведомляет о подсказках и автопереходе за 5 и 15 минут,
@@ -252,6 +255,21 @@ if(isset($update["message"]))
                         $sectors = getSectors($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
 
                         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "parse_mode" => 'HTML', "text" => $sectors ? $sectors : 'Ошибка'));
+                    }
+                break;
+                case '/messages':
+                    if(!$settings['status'])
+                    {
+                        $result = "Нет активной игры";
+                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
+                    } else 
+                    {
+                        $messages = getMessages($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
+
+                        foreach($messages as $message)
+                        {
+                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "parse_mode" => 'HTML', "text" => $message));
+                        }
                     }
                 break;
                 case '/encrypt':
