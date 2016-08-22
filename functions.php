@@ -275,6 +275,40 @@ function sendCode($cookies,$domain,$gameid,$code)
     return $array;
 }
 
+function getSectors($cookies,$domain,$gameid)
+{
+    $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_COOKIE, $cookies);
+
+    $response = curl_exec($ch);
+
+    // close the connection, release resources used
+    curl_close($ch);
+
+    // Считаем сектора
+    preg_match('#<h3>.*На уровне ([0-9]*) сектора#ms',$response, $matches);
+    
+    if($matches) // Если есть результаты - значит на уровне есть сектора
+    {
+      $sectors_total = $matches[1];
+      preg_match('#<h3>.*На уровне ([0-9]*) сектора.*?<span class="color_sec">\(осталось закрыть ([0-9]*)\)</span>#ms', $response, $matches);
+      $sectors_rem = intval($matches[2]);
+
+      if($sectors_rem == 0)
+        $sectors_rem = $sectors_total;
+
+      $sectors_done = $sectors_total-$sectors_rem;
+    
+      $result = "На уровне $sectors_total сектора. Закрыто $sectors_done. Осталось закрыть $sectors_rem";
+    } else
+    {
+      $result = "На уровне нет разделения по секторам";
+    }
+
+    return $result;
+}
+
 function getCoordsFromText($text)
 {
   global $purifier;

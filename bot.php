@@ -48,6 +48,7 @@ $helptext = "Это бот для игры Encounter
 /level - отобразить текст текущего уровня.
 \tБот попробует найти в тексте уровня координаты и выслать их в виде локации для упрощения построения маршрута.
 /hints - отобразить подсказки на уровне
+/sectors - отобразить сектора уровня
 
 Коды пробивать с префиксом & либо #
 Например: &en123
@@ -240,6 +241,18 @@ if(isset($update["message"]))
                         }
                     }
 
+                break;
+                case '/sectors':
+                    if(!$settings['status'])
+                    {
+                        $result = "Нет активной игры";
+                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
+                    } else 
+                    {
+                        $sectors = getSectors($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
+
+                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "parse_mode" => 'HTML', "text" => $sectors ? $sectors : 'Ошибка'));
+                    }
                 break;
                 case '/encrypt':
                     $result = encrypt($args[0], ENCRYPTION_KEY);
