@@ -169,7 +169,7 @@ if(isset($update["message"]))
                         case 'start':
                             if($settings['payment']>=PAYMENT_SUM)
                             {
-                                if(in_array($message['from']['username'], $settings['admins']) && PAYMENT_SUM<0)
+                                if( (in_array($message['from']['username'], $settings['admins']) && PAYMENT_SUM==-1) || ( $settings['payment'] >= PAYMENT_SUM && PAYMENT_SUM >=0) )
                                 {
                                     $sql = "UPDATE games SET status = 1 WHERE chat_id = $chat_id";
                                     mysql_query($sql);
@@ -184,7 +184,7 @@ if(isset($update["message"]))
                             }
                         break;
                         case 'stop':
-                            if(in_array($message['from']['username'], $settings['admins']) && PAYMENT_SUM<0)
+                            if( (in_array($message['from']['username'], $settings['admins']) && PAYMENT_SUM==-1) || ( $settings['payment'] >= PAYMENT_SUM && PAYMENT_SUM >=0) )
                             {
                                 $sql = "UPDATE games SET status = 0 WHERE chat_id = $chat_id";
                                 mysql_query($sql);
@@ -195,7 +195,7 @@ if(isset($update["message"]))
                             }
                         break;
                         case 'delete':
-                            if(in_array($message['from']['username'], $settings['admins']) && PAYMENT_SUM<0)
+                            if( (in_array($message['from']['username'], $settings['admins']) && PAYMENT_SUM==-1) || ( $settings['payment'] >= PAYMENT_SUM && PAYMENT_SUM >=0) )
                             {
                                 $sql="DELETE FROM games WHERE chat_id = $chat_id";
                                 mysql_query($sql);
