@@ -14,7 +14,7 @@ CREATE TABLE `admins` (
 
 CREATE TABLE `games` (
   `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `chat_id` int(11) DEFAULT NULL,
+  `chat_id` bigint(11) DEFAULT NULL,
   `game_id` int(5) unsigned DEFAULT NULL,
   `game_domain` varchar(255) DEFAULT NULL,
   `game_login` varchar(255) DEFAULT NULL,
@@ -35,7 +35,7 @@ CREATE TABLE `log` (
   `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
   `time` int(11) unsigned DEFAULT NULL,
   `message_id` int(11) DEFAULT NULL,
-  `chat_id` int(11) DEFAULT NULL,
+  `chat_id` bigint(11) DEFAULT NULL,
   `chat_title` varchar(255) DEFAULT NULL,
   `text` text,
   `type` tinyint(1) unsigned DEFAULT NULL COMMENT '1 - код, 2  - команда, 3 - текст',
@@ -69,7 +69,7 @@ CREATE TABLE `queue` (
 
 CREATE TABLE `timers` (
   `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `chat_id` int(11) DEFAULT NULL,
+  `chat_id` bigint(11) DEFAULT NULL,
   `game_id` int(5) unsigned DEFAULT NULL,
   `level_id` int(11) DEFAULT NULL,
   `hint` tinyint(1) unsigned DEFAULT NULL,
