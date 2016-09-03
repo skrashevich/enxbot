@@ -46,14 +46,17 @@ while(true)
                         $lat = $match['lat'];
                         $lon = $match['lon'];
 
+                        $address = $match['address'];
+
                         apiRequestJSON("sendLocation", array('chat_id' => $timer['chat_id'], "latitude" => $lat, "longitude" => $lon));
                         apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "text" => "$lat $lon"));
+                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'HTML', "text" => $address));
                     }
 
                     // Обновляем LevelID в базе
                     $array = getHints($game['cookies'],$game["game_domain"],$game["game_id"]);
                     $levelId = $array['levelid'];
-                    $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $chat_id";
+                    $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $timer[chat_id]";
                     mysql_query($sql);
                 break;
                 default:
@@ -85,8 +88,11 @@ while(true)
                 $lat = $match['lat'];
                 $lon = $match['lon'];
 
+                $address = $match['address'];
+
                 apiRequestJSON("sendLocation", array('chat_id' => $row['chat_id'], "latitude" => $lat, "longitude" => $lon));
                 apiRequestJSON("sendMessage", array('chat_id' => $row['chat_id'], "text" => "$lat $lon"));
+                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'HTML', "text" => $address));
             }
         }
         $levels[$row['chat_id']]=$row['last_level_id'];

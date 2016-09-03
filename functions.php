@@ -355,12 +355,20 @@ function getCoordsFromText($text)
     $lat = $match[2];
     $lon = $match[3];
 
+    // Костыли для отсечения дерьма
+    if(strlen($lat)<5)
+      continue;
+    if(strlen($lon)<5)
+      continue;
+
     // Геокодирование адреса
     $url = "https://geocode-maps.yandex.ru/1.x/?format=json&sco=latlong&geocode=$lat,$lon";
     $geocoder = file_get_contents($url);
     $geodata = json_decode($geocoder, true);
                         
     $address = $geodata['response']['GeoObjectCollection']['featureMember'][0]['GeoObject']['metaDataProperty']['GeocoderMetaData']['text'];
+
+    $address .= "\n<a href='yandexmaps://build_route_on_map/?lat_to=$lat&lon_to=$lon'>яндекс</a> <a href='comgooglemaps://?daddr=$lat,$lon&zoom=12&directionsmode=driving'>google</a>";
 
     $result[] = Array('lat' => $lat, 'lon' => $lon, 'text' => $text, 'address' => $address);
    }

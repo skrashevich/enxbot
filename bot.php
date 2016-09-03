@@ -249,7 +249,7 @@ if(isset($update["message"]))
 
                             apiRequestJSON("sendLocation", array('chat_id' => $chat_id, "latitude" => $lat, "longitude" => $lon));
                             apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => "$lat $lon"));
-                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => $address));
+                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'HTML', "text" => $address));
                         }
                     }
 
