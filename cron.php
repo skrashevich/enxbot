@@ -10,9 +10,18 @@ if (php_sapi_name() != 'cli') {
   die('Скрипт должен быть запущен из консоли');
 }
 
-$sql = "SELECT * FROM games WHERE last_level_id >=0 AND status=1";
-$gameresult = mysql_query($sql);
-while($game = mysql_fetch_assoc($gameresult))
+// Если скрипт уже работает, то не запускаем второй раз
+if( get_setting('cron_running') == 'true' )
+{
+    die('Исполняется паралельный процесс');
+}
+
+// Ставим блокировку запуска
+set_setting('cron_running', 'true');
+
+$sql = "SELECT * FROM games WHERE last_level_id >=0 AND status>0";
+$gameresult = mysqli_query($db, $sql);
+while($game = mysqli_fetch_assoc($gameresult))
 {
     //
     // Этап 0 - проверка что мы авторизированы и авторизация если нет
@@ -27,8 +36,8 @@ while($game = mysql_fetch_assoc($gameresult))
             $result = "Не проходит авторизация на игровом движке";
         } else {
             $result = "Авторизация успешно пройдена";
-            $sql = "UPDATE games SET cookies = '".mysql_escape_string($cookies)."' WHERE chat_id = $game[chat_id] AND game_id = $game[game_id]";
-            mysql_query($sql);
+            $sql = "UPDATE games SET cookies = '".mysqli_escape_string($db, $cookies)."' WHERE chat_id = $game[chat_id] AND game_id = $game[game_id]";
+            mysqli_query($db, $sql);
         }
     }
 
@@ -39,25 +48,25 @@ while($game = mysql_fetch_assoc($gameresult))
     
     // Смотрим, есть ли уже таймеры на подсказки
     $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=1";
-    $result = mysql_query($sql);
-    if(mysql_num_rows($result)!=count($array['remains']))
+    $result = mysqli_query($db, $sql);
+    if(mysqli_num_rows($result)!=count($array['remains']))
     {
         print "Подсказки на игре $game[game_id] на уровне $array[levelid] обновились\n";
         $sql="DELETE FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=1 AND ABS('.time().'-`time`)>60";
-        mysql_query($sql);
+        mysqli_query($db, $sql);
 
         // Забиваем подсказки в базу заново
         foreach($array['remains'] as $hint=>$secs)
         {
             $sql="INSERT INTO timers (game_id, chat_id, level_id, hint, time, type) VALUES ($game[game_id], $game[chat_id], ".intval($array['levelid']).", $hint, ".(time()+$secs).", 1)";
-            $result = mysql_query($sql);
+            $result = mysqli_query($db, $sql);
         }
     } else {
         // Обновляем подсказки в базе на всякий случай
         foreach($array['remains'] as $hint=>$secs)
         {
             $sql="UPDATE timers SET time= ".(time()+$secs)." WHERE game_id = $game[game_id] AND chat_id = $game[chat_id] AND level_id = ".intval($array['levelid'])." AND hint=$hint";
-            $result = mysql_query($sql);
+            $result = mysqli_query($db, $sql);
         }
     }
 
@@ -65,32 +74,32 @@ while($game = mysql_fetch_assoc($gameresult))
     {
         // Проверяем наличие таймера на АП
         $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=2";
-        $result = mysql_query($sql);
+        $result = mysqli_query($db, $sql);
 
-        if(mysql_num_rows($result)>0)
+        if(mysqli_num_rows($result)>0)
         {
             // Обновляем время АП на всякий случай
             $sql="UPDATE timers SET time= ".(time()+$array['UPsecs'])." WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=2";
-            $result = mysql_query($sql);
+            $result = mysqli_query($db, $sql);
         } else {
             // Добавляем АП в базу
             $sql="INSERT INTO timers (game_id, chat_id, level_id, hint, time, type) VALUES ($game[game_id], $game[chat_id], ".intval($array['levelid']).", 0, ".(time()+$array['UPsecs']).", 2)";
-            $result = mysql_query($sql);
+            $result = mysqli_query($db, $sql);
         }
     }
 
     // Обновляем текущий levelid в базе (на всякий случай)
     $sql = "UPDATE games SET last_level_id = ".intval($array['levelid'])." WHERE game_id = $game[game_id] AND chat_id = $game[chat_id]";
-    mysql_query($sql);
+    mysqli_query($db, $sql);
 }
 
 //
 // По всем играм - проверяем сколько осталось до подсказок и до АПа, шлём информацию
 //
 
-$sql = "SELECT timers.* FROM timers, games WHERE games.last_level_id=timers.level_id AND games.status=1 AND timers.game_id = games.game_id AND games.chat_id = timers.chat_id AND timers.time >= ".time();
-$sqlresult = mysql_query($sql);
-while($timer = mysql_fetch_assoc($sqlresult))
+$sql = "SELECT timers.* FROM timers, games WHERE games.last_level_id=timers.level_id AND games.status>0 AND timers.game_id = games.game_id AND games.chat_id = timers.chat_id AND timers.time >= ".time();
+$sqlresult = mysqli_query($db, $sql);
+while($timer = mysqli_fetch_assoc($sqlresult))
 {
     $remain = $timer['time']-time();
     $remain_text = floor($remain/60)." мин ".($remain-floor($remain/60)*60)." сек";
@@ -121,4 +130,8 @@ while($timer = mysql_fetch_assoc($sqlresult))
 // Удаляем таймеры, просроченные более чем на 1 час
 //
 $sql = "DELETE FROM timers WHERE ".time()." > time+60*60";
-mysql_query($sql);
+mysqli_query($db, $sql);
+
+
+// Снимаем блокировку запуска
+set_setting('cron_running', 'false');

@@ -1,8 +1,5 @@
 <?php
-require_once 'HTMLPurifier.standalone.php';
-$htmlpurconfig = HTMLPurifier_Config::createDefault();
-$htmlpurconfig->set('HTML', 'Allowed', '');
-$purifier = new HTMLPurifier($htmlpurconfig);
+require_once 'Html2Text.php';
 
 function auth($domain,$login,$pass)
 {
@@ -77,8 +74,6 @@ function testGame($cookies,$domain,$gameid)
 
 function getLevelText($cookies,$domain,$gameid)
 {
-  global $purifier;
-
   $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru');
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_COOKIE, $cookies);
@@ -94,11 +89,11 @@ function getLevelText($cookies,$domain,$gameid)
 
     $levelText = $matches[1];
 
-    preg_match('#<h2>Уровень <span>(\d+)</span> из (\d+)</h2>#', $response, $matches);
+    preg_match('#<h2>Уровень <span>(\d+)</span> из (\d+).*?</h2>#', $response, $matches);
     $levelNum = $matches[1];
     $levelTotal = $matches[2];
 
-    $text_clean = $purifier->purify($levelText);
+    $text_clean = html2text($levelText);
     
     $result = "<b>Уровень $levelNum из $levelTotal</b>\n$text_clean";
 
@@ -107,8 +102,6 @@ function getLevelText($cookies,$domain,$gameid)
 
 function getHints($cookies,$domain,$gameid)
 {
-  global $purifier;
-
   $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru');
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_COOKIE, $cookies);
@@ -139,7 +132,7 @@ function getHints($cookies,$domain,$gameid)
       $hint = $match[1];
       $text = trim($match[2]);
 
-      $text = $purifier->purify($text);
+      $text = html2text($text);
 
       $hints[$hint] = $text;
     }
@@ -185,7 +178,6 @@ function getHints($cookies,$domain,$gameid)
 
 function sendCode($cookies,$domain,$gameid,$code)
 {
-    global $purifier;
     $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_COOKIE, $cookies);
@@ -205,6 +197,30 @@ function sendCode($cookies,$domain,$gameid,$code)
 
     $levelNumber = $matches[1];
 
+    // Работаем с открытымибонусами
+    preg_match_all('#<h3 class="color_correct">(.*?)Бонус (\d+):(.*?)<span class="color_sec">\((.*?)\)</span>.*?<p>(.*?)</p>#mis', $response, $matches, PREG_SET_ORDER);
+    $Bonuses = Array();
+    foreach($matches as $k=>$v)
+    {
+      $Bonuses[$v[2]] = Array(
+        'open' => true,
+        'name' => trim($v[3]),
+        'status' => $v[4],
+        'text' => $v[5]
+      );
+    }
+
+    // Работаем с закрытыми мибонусами
+    preg_match_all('#<h3 class="color_bonus">(.*?)Бонус (\d+):(.*?)</h3>#mis', $response, $matches, PREG_SET_ORDER);
+    foreach($matches as $k=>$v)
+    {
+      $Bonuses[$v[2]] = Array(
+        'open' => false,
+        'name' => trim($v[3]),
+        'status' => '',
+        'text' => ''
+      );
+    }
 
     unset($ch,$response);
 
@@ -229,12 +245,12 @@ function sendCode($cookies,$domain,$gameid,$code)
 
     preg_match('#<span class="color_[i]?[n]?correct".*?>(.*)</span>#',$response,$matches);
 
-    $result = $purifier->purify(str_replace('&quot;','', $matches[1]));
+    $result = html2text(str_replace('&quot;','', $matches[1]));
 
     // Если вдруг закончили игру
     if( preg_match('#<center class="gameCongratulation">(.*)</center>#ms', $response,$matches) )
     {
-      $result = $purifier->purify($matches[1]);
+      $result = html2text($matches[1]);
       $array['result'] = $result;
       $array['levelid'] = '-1';
       $array['UP'] = false;
@@ -268,12 +284,125 @@ function sendCode($cookies,$domain,$gameid,$code)
       $result .= " ($sectors_done/$sectors_total)";
     }
 
+    // Работаем с вновь открытымибонусами
+    preg_match_all('#<h3 class="color_correct">(.*?)Бонус (\d+):(.*?)<span class="color_sec">\((.*?)\)</span>.*?<p>(.*?)</p>#mis', $response, $matches, PREG_SET_ORDER);
+    foreach($matches as $k=>$v)
+    {
+      if($Bonuses[$v[2]]['open'] == false) // Если бонус был не открыт
+      {
+        $result .= "\nОткрылся бонус ".trim($v[3]).": $v[5] ($v[4])";
+      }
+    }
+
+
     $array['result'] = $result;
     $array['levelid'] = $levelId;
     $array['UP'] = false;
 
     return $array;
 }
+
+function parseCode($text, $chat_id, $sender, $location=Array())
+{
+  global $db;
+  $sender = mysqli_escape_string($db, $sender);
+  $sql = "SELECT * FROM games WHERE chat_id = $chat_id";
+  $sqlresult = mysqli_query($db, $sql);
+  $settings = mysqli_fetch_assoc($sqlresult);
+  $ch=mb_substr($text,0,1);
+  if(!$settings['status'])
+  {
+    $result = "Нет активной игры";
+  } elseif($chat_id > 0)
+  {
+      // Если код пришел в личку, то ругаемся
+      $result = "Отправка кодов возможна только в публичные чаты";
+  } elseif( ($settings['status']==2) || ($settings['status']==4) )
+  {
+    // Заносим код в лог но не пробиваем его
+    $code=mysqli_escape_string($db, substr($text,1));
+    list($code,$comment) = explode('//', $code, 2);
+    // Если не принимать код без комментария и комментария нет
+    if(get_setting('nocomment', $chat_id)=='true' && strlen($comment)==0)
+    {
+      $result = "Прием кода возможен только с комментарием";
+      return $result;
+    }
+    if($settings['status']==4) // Если включен режим геокодов, без пробития в двигло
+    {
+      if(isset($location['lat']) && isset($location['lon']))
+      {
+        $comment .= " ($location[lat], $location[lon])";
+      } else
+      {
+        $result = "Прием кодов возможен только с геолокацией";
+        return $result;
+      }
+    }
+    $sql = "INSERT INTO codeslog (chat_id, level, code, comment, `time`, sender, `return`) VALUES
+            (
+                $chat_id, ".intval($settings['last_level_id']).", '".mysqli_escape_string($db, $code)."', '".mysqli_escape_string($db, $comment)."', ".time().", '$sender', -1
+            )";
+    mysqli_query($db, $sql);
+    $result = "Код записан, но не передан в движок";
+  } else // если status = 1 или 3
+  {
+      $code=substr($text,1);
+      // Пробиваем в движок все до символов //
+      list($code,$comment) = explode('//', $code, 2);
+      // Если не принимать код без комментария и комментария нет
+      if(get_setting('nocomment', $chat_id)=='true' && strlen($comment)==0)
+      {
+        $result = "Прием кода возможен только с комментарием";
+        return $result;
+      }
+      
+      // Обрабатываем геокоды
+      if($settings['status']==3) // Если включен режим геокодов
+      {
+        if(isset($location['latitude']) && isset($location['longitude']))
+        {
+          $comment .= " ($location[lat], $location[lon])";
+        } else
+        {
+          $result = "Прием кодов возможен только с геолокацией";
+          return $result;
+        }
+      }
+      if(!$settings["cookies"])
+      {
+        $cookies = auth($settings["game_domain"], $settings["game_login"], $settings["game_pass"]);
+        $sql = "UPDATE games SET cookies = '".mysqli_escape_string($db, $cookies)."' WHERE chat_id = $settings[chat_id]";
+        mysqli_query($db, $sql);
+      }
+      else
+      {
+        $cookies = $settings["cookies"];
+      }
+      if($cookies===false)
+      {
+        $result = "Не проходит авторизация на игровом движке";
+      } else
+      {
+          $array = sendCode($cookies,$settings["game_domain"],$settings["game_id"],$code);
+          
+          
+          $result = $array['result'];
+        
+        
+        $levelId = $array['levelid'];
+        $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $settings[chat_id]";
+        mysqli_query($db, $sql);
+        $sql = "INSERT INTO codeslog (chat_id, level, code, comment, `time`, sender, `return`) VALUES
+                (
+                  $chat_id, ".intval($levelId).", '".mysqli_escape_string($db, $code)."', '".mysqli_escape_string($db, $comment)."', ".time().", '$sender', ".intval($array['errno'])."
+                )";
+        mysqli_query($db, $sql);
+      }
+    }
+    return $result;
+}
+
 function getSectors($cookies,$domain,$gameid)
 {
     $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid);
@@ -310,8 +439,6 @@ function getSectors($cookies,$domain,$gameid)
 
 function getMessages($cookies,$domain,$gameid)
 {
-    global $purifier;
-
     $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_COOKIE, $cookies);
@@ -332,7 +459,7 @@ function getMessages($cookies,$domain,$gameid)
 
       for($i=0;$i<count($messages);$i++)
       {
-        $messages[$i] = $purifier->purify($messages[$i]);
+        $messages[$i] = html2text($messages[$i]);
       }
     } else
     {
@@ -344,38 +471,224 @@ function getMessages($cookies,$domain,$gameid)
 
 function getCoordsFromText($text)
 {
-  global $purifier;
   $result = Array();
    // Ищем в тексте координаты
-   $levelTextClean = $purifier->purify($text);
-   preg_match_all('#(.*?)[\s:,;\.](-?[1-8]?\d(?:\.\d{1,8})?|90(?:\.0{1,8})?)[,\s]+?(-?(?:1[0-7]|[1-9])?\d(?:\.\d{1,8})?|180(?:\.0{1,8})?)#', $levelTextClean, $matches, PREG_SET_ORDER);
+   $levelTextClean = html2text($text);
+   preg_match_all('#(.*?)[\s:,;\.]?(-?[1-8]?\d(?:\.\d{1,8})?|90(?:\.0{1,8})?)[,\s]+?(-?(?:1[0-7]|[1-9])?\d(?:\.\d{1,8})?|180(?:\.0{1,8})?)#', $levelTextClean, $matches, PREG_SET_ORDER);
    foreach($matches as $match)
    {
     $text = $match[0];
     $lat = $match[2];
     $lon = $match[3];
-
     // Костыли для отсечения дерьма
     if(strlen($lat)<5)
       continue;
     if(strlen($lon)<5)
       continue;
+       
+    $address = geocoder($lat, $lon);
+    // Сразу схемы нельзя отправлять из-за ограничений телеграмма.
+    //$address .= "\n<a href=\"yandexmaps://build_route_on_map/?lat_to=$lat&lon_to=$lon\">яндекс</a> <a href=\"comgooglemaps://?daddr=$lat,$lon&zoom=12&directionsmode=driving\">google</a>";
+    $links = "\n<a href='http://bots.svk.su/geo.php?map=yandex&lat=$lat&lon=$lon'>яндекс</a> <a href='http://bots.svk.su/geo.php?map=google&lat=$lat&lon=$lon'>google</a>";
+    $result[] = Array('lat' => $lat, 'lon' => $lon, 'text' => $text, 'address' => $address, 'links' => $links);
+   }
+   return $result;
+}
 
+function get_setting($name, $chat_id=0)
+{
+  global $db;
+  $chat_id = intval($chat_id);
+  $name = mysqli_escape_string($db, $name);
+  $sql="SELECT * FROM settings WHERE chat_id = $chat_id AND name = '$name' LIMIT 1";
+  $result = mysqli_query($db, $sql);
+  if(mysqli_num_rows($result)==0)
+  {
+    return false;
+  }
+  $row = mysqli_fetch_assoc($result);
+  $value = $row['value'];
+  return $value;
+}
+function set_setting($name,$value,$chat_id=0)
+{
+  global $db;
+  $chat_id = intval($chat_id);
+  if(!get_setting($name, $chat_id))
+  {
+    $sql = "INSERT INTO settings (chat_id,name,value) VALUES ($chat_id, '".mysqli_escape_string($db, $name)."', '".mysqli_escape_string($db, $value)."')";
+    mysqli_query($db, $sql);
+  } else
+  {
+    $sql = "UPDATE settings SET value = '".mysqli_escape_string($db, $value)."' WHERE name = '".mysqli_escape_string($db, $name)."' AND chat_id = $chat_id";
+    mysqli_query($db, $sql);
+  }
+  return true;
+}
+
+function getSettingsButtons($chat_id)
+{
+  $buttons = Array(
+      Array(
+          Array('text' => 'Прием стандартных кодов без префикса: '.(get_setting('noprefix', $chat_id) == 'true' ? '✅' : '🚫'), 'callback_data' => '/noprefix '.$chat_id),
+      ),
+      Array(
+          Array('text' => 'Не принимать код без примечания: '.(get_setting('nocomment', $chat_id) == 'true' ? '✅' : '🚫'), 'callback_data' => '/nocomment '.$chat_id),
+      )
+  );
+  return $buttons;
+}
+
+function geocoder($lat, $lon)
+{
+  global $db;
+  // Проверяем наличие координат в кэше
+  $sql = "SELECT * FROM geocache WHERE lat=$lat AND lon=$lon";
+  $result = mysqli_query($db, $sql);
+  if(mysqli_num_rows($result)>0)
+  {
+    $cacherow = mysqli_fetch_assoc($result);
+    $address = $cacherow['address'];
+  } else
+  {
     // Геокодирование адреса
     $url = "https://geocode-maps.yandex.ru/1.x/?format=json&sco=latlong&geocode=$lat,$lon";
     $geocoder = file_get_contents($url);
     $geodata = json_decode($geocoder, true);
                         
     $address = $geodata['response']['GeoObjectCollection']['featureMember'][0]['GeoObject']['metaDataProperty']['GeocoderMetaData']['text'];
-
-    $address .= "\n<a href='yandexmaps://build_route_on_map/?lat_to=$lat&lon_to=$lon'>яндекс</a> <a href='comgooglemaps://?daddr=$lat,$lon&zoom=12&directionsmode=driving'>google</a>";
-
-    $result[] = Array('lat' => $lat, 'lon' => $lon, 'text' => $text, 'address' => $address);
-   }
-
-   return $result;
+    // Добавляем адрес в кэш
+    $sql = "INSERT INTO geocache (lat,lon,added,address) VALUES ($lat, $lon, ".time().", '".mysqli_escape_string($db, $address)."')";
+    mysqli_query($db, $sql);
+  }
+  return $address;
 }
 
+function html2text($text)
+{
+  $html = new Html2Text($text);
+  return  $html->getText();
+}
+
+
+function gameSettingsbyUser($user_id)
+{
+  global $db;
+  $settings = Array();
+  
+  $sql = "SELECT * FROM games WHERE status>0";
+  $result = mysqli_query($db, $sql);
+  while($row = mysqli_fetch_assoc($result))
+  {
+    $bresult = apiRequestJSON("getChatMember", array('chat_id' => $row['chat_id'], "user_id" => $user_id));
+    $chatMember = $bresult;
+    switch($chatMember['status'])
+    {
+      case 'creator':
+      case 'administrator':
+      case 'member':
+        $settings = $row;
+      break;
+    }
+  }
+  return $settings;
+}
+
+function navi($lat1,$lon1,$lat2,$lon2,$engine='yandex',$expire = 600)
+{
+  global $db;
+  // Проверяем наличие данных в кэше
+  $sql = "SELECT * FROM directionscache WHERE lat1=$lat1 AND lon1=$lon1 AND lat2=$lat2 AND lon2=$lon2 AND added>".(time()-$expire);
+  $sqlresult = mysqli_query($db, $sql);
+  if(mysqli_num_rows($sqlresult)>0)
+  {
+      $row = mysqli_fetch_assoc($sqlresult);
+      $result = Array(
+        'length' => $row['length'],
+        'time' => $row['time'],
+        'url' => 'cached'
+      );
+  } else
+  {
+    switch($engine)
+    {
+      case 'yandex':
+        $url = 'https://geointernal.mob.maps.yandex.net/v1/router?rll='.$lon1.','.$lat1.'~'.$lon2.','.$lat2.'&output=time&mode=jams&_='.time();
+        $xml = file_get_contents($url);
+        preg_match('#<r:length>([0-9\.]*?)</r:length>#', $xml, $matches);
+        $length = $matches[1];
+        preg_match('#<r:time>([0-9\.]*?)</r:time>#', $xml, $matches);
+        $time = $matches[1];
+        $result = Array(
+          'length' => $length,
+          'time' => $time,
+          'url' => $url
+        );
+      break;
+      case 'google':
+        $url = 'https://maps.googleapis.com/maps/api/directions/json?origin='.$lat1.','.$lon1.'&destination='.$lat2.','.$lon2;
+        $json = file_get_contents($url);
+        $data = json_decode($json, true);
+        if($data['status']=='OK')
+        {
+          $length = $data['routes'][0]['legs'][0]['distance']['value'];
+          $time = $data['routes'][0]['legs'][0]['duration']['value'];
+        }
+        $result = Array(
+          'length' => $length,
+          'time' => $time,
+          'url' => $url
+        );
+      break;
+      default:
+        return false;
+      break;
+    }
+    $sql = "INSERT INTO directionscache (lat1,lon1,lat2,lon2,added,length,time)
+    VALUES ($lat1, $lon1, $lat2, $lon2,".time().",$length,$time)";
+    mysqli_query($db,$sql);
+  }
+  return $result;
+}
+
+function screenshot($sendFlag, $chat_id, $cookies, $domain, $gameid, $lastlevelid)
+{
+  $url = 'http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru';
+  $filename = "screens/".$chat_id.".$gameid.".intval($lastlevelid).".".microtime(true).'.png';
+  // Получаем нужные куки
+  preg_match('#atoken=(.*?);#', $cookies, $matches);
+  $atoken = $matches[1];
+  preg_match('#stoken=(.*?);#', $cookies, $matches);
+  $stoken = $matches[1];
+  preg_match('#GUID=(.*?);#', $cookies, $matches);
+  $guid = $matches[1];
+  preg_match('#Domain=(.*?);#', $cookies, $matches);
+  $domaincookie = $matches[1];
+
+  if(!file_exists(PHANTOMJS))
+  {
+    if($sendFlag)
+    {
+      apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => "Ошибка: не найден phantomjs"));
+    }
+    return false;
+  } else
+  {
+    exec(PHANTOMJS.' enscreen.js "'.$url.'" "'.$filename.'" "'.$guid.'" "'.$stoken.'" "'.$domaincookie.'" "'.$atoken.'"');
+    if($sendFlag)
+    {
+      if(file_exists($filename))
+      {
+        apiRequestPOST("sendPhoto", array('chat_id' => $chat_id, "photo" => '@'.$filename));
+      } else
+      {
+        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => "Ошибка: не удалось получить скриншот"));
+        return '';
+      }
+    }
+    return $filename;
+  }
+}
 
 
 
@@ -385,20 +698,48 @@ function getCoordsFromText($text)
 
 function logMessage($message, $type=0)
 {
+    global $db;
     $sql = "INSERT INTO log (time, message_id, chat_id, chat_title, text, type, sender_id, sender_username)
     VALUES (
         ".time().",
         $message[message_id],
         ".$message['chat']['id'].",
-        '".mysql_escape_string($message['chat']['title'])."',
-        '".mysql_escape_string($message['text'])."',
+        '".mysqli_escape_string($db, $message['chat']['title'])."',
+        '".mysqli_escape_string($db, $message['text'])."',
         $type,
         ".$message['from']['id'].",
-        '".mysql_escape_string($message['from']['username'])."'
+        '".mysqli_escape_string($db, $message['from']['username'])."'
     )
     ";
-    mysql_query($sql);
+    mysqli_query($db, $sql);
     return true;
+}
+
+function apiRequestPOST($method, $parameters) {
+  if (!is_string($method)) {
+    error_log("Method name must be a string\n");
+    return false;
+  }
+
+  if (!$parameters) {
+    $parameters = array();
+  } else if (!is_array($parameters)) {
+    error_log("Parameters must be an array\n");
+    return false;
+  }
+
+  $parameters["method"] = $method;
+
+  $handle = curl_init(API_URL);
+  curl_setopt($handle, CURLOPT_RETURNTRANSFER, true);
+  curl_setopt($handle, CURLOPT_CONNECTTIMEOUT, 10);
+  curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, false);
+  curl_setopt($handle, CURLOPT_TIMEOUT, 60);
+  curl_setopt($handle, CURLOPT_SAFE_UPLOAD, false);
+  curl_setopt($handle, CURLOPT_POSTFIELDS, $parameters);
+  //curl_setopt($handle, CURLOPT_HTTPHEADER, array("Content-Type: multipart/form-data"));
+
+  return exec_curl_request($handle);
 }
 
 

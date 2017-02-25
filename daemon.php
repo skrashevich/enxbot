@@ -15,12 +15,12 @@ while(true)
     $sql = "SELECT timers.*,games.chat_id,games.cookies,games.game_domain,games.game_id,games.cookies
             FROM timers, games
             WHERE games.last_level_id=timers.level_id
-            AND games.status=1
+            AND games.status>0
             AND games.chat_id = timers.chat_id
             AND timers.game_id = games.game_id
             AND timers.time <= ".time();
-    $sqlresult = mysql_query($sql);
-    while($timer = mysql_fetch_assoc($sqlresult))
+    $sqlresult = mysqli_query($db, $sql);
+    while($timer = mysqli_fetch_assoc($sqlresult))
     {
         $secs = time()-$timer['time'];
         if($secs >= 2)
@@ -57,21 +57,21 @@ while(true)
                     $array = getHints($game['cookies'],$game["game_domain"],$game["game_id"]);
                     $levelId = $array['levelid'];
                     $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $timer[chat_id]";
-                    mysql_query($sql);
+                    mysqli_query($db, $sql);
                 break;
                 default:
                     apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'Markdown', "text" => "*Что-то обновилось*"));
                 break;
             }
             $sql="DELETE FROM timers WHERE id=$timer[id]";
-            mysql_query($sql);
+            mysqli_query($db, $sql);
         }
     }
 
     // Смотрим в базе изменение ID уровня. Если поменялся, значит АП мимо бота и надо об этом сообщить.
-    $sql="SELECT * FROM games WHERE status=1 AND last_level_id>0";
-    $result = mysql_query($sql);
-    while($row = mysql_fetch_assoc($result))
+    $sql="SELECT * FROM games WHERE status>0 AND last_level_id>0";
+    $result = mysqli_query($db, $sql);
+    while($row = mysqli_fetch_assoc($result))
     {
         if( ($row['last_level_id'] != $levels[$row['chat_id']]) && $levels[$row['chat_id']])
         {

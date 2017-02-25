@@ -8,8 +8,8 @@
 //$mysql_pass = '';
 //$mysql_db = '';
 
-mysql_connect($mysql_server, $mysql_user, $mysql_pass);
-mysql_select_db($mysql_db);
-mysql_query('set names utf8');
+$db = mysqli_connect($mysql_server, $mysql_user, $mysql_pass);
+mysqli_select_db($db, $mysql_db);
+mysqli_query($db, 'set names utf8');
 
 unset($mysql_pass);

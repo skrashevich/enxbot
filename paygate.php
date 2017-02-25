@@ -39,12 +39,12 @@ $return = json_decode($response, true);
 $message = decrypt($return['message'], ENCRYPTION_KEY);
 list($chat_id, $game_id) = explode('|', $message, 2);
 
-$chat_id = mysql_escape_string($chat_id);
+$chat_id = mysqli_escape_string($db, $chat_id);
 $game_id = intval($game_id);
 
 $sql = "SELECT payment FROM games WHERE chat_id = $chat_id AND game_id = $game_id";
-$result = mysql_query($sql);
-$row = mysql_fetch_assoc($result);
+$result = mysqli_query($db, $sql);
+$row = mysqli_fetch_assoc($result);
 
 $payment = $row['payment']+$amount;
 
@@ -55,6 +55,6 @@ if($payment >= PAYMENT_SUM)
     $text = "Поступила оплата за бота: <b>$amount</b> руб. Осталось заплатить: <b>".(PAYMENT_SUM-$payment).'</b> руб';
 }
 $sql = "UPDATE games SET payment = payment+$amount WHERE chat_id = $chat_id AND game_id = $game_id";
-mysql_query($sql);
+mysqli_query($db, $sql);
 
 apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'HTML', "text" => $text));
