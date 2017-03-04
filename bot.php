@@ -409,9 +409,8 @@ if(isset($update["message"]))
 
                             $address = $match['address'];
 
-                            apiRequestJSON("sendLocation", array('chat_id' => $chat_id, "latitude" => $lat, "longitude" => $lon));
-                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => "$lat $lon"));
-                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'HTML', "text" => $address));
+                            apiRequestJSON("sendVenue", array('chat_id' => $settings['chat_id'], "latitude" => $lat, "longitude" => $lon, "title" => $text, "address" => $address));
+                            apiRequestJSON("sendMessage", array('chat_id' => $settings['chat_id'], "parse_mode" => 'HTML', "text" => "$lat $lon"));
                         }
                     }
 
