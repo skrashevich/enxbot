@@ -100,7 +100,7 @@ function getLevelText($cookies,$domain,$gameid)
     return $result;
 }
 
-function getHints($cookies,$domain,$gameid)
+function getHints($cookies,$domain,$gameid,$onlyOpen=false)
 {
   $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru');
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -115,15 +115,19 @@ function getHints($cookies,$domain,$gameid)
 
     // Вычленяем подсказки
 
-    preg_match_all('#<span class="color_dis"><b>Подсказка&nbsp;([0-9]+)</b>&nbsp;будет через&nbsp;<span class="bold_off color_dis" id="time[0-9]*?">(.*?)</span><script type="text/javascript">.*?"StartCounter":([0-9]+),.*?</script>#ms',$response,$matches,PREG_SET_ORDER);
-    foreach($matches as $match)
+    if(!$onlyOpen)
     {
-      $hint = $match[1];
-      $remain = $match[2];
-      $remain_sec = $match[3];
+      preg_match_all('#<span class="color_dis"><b>Подсказка&nbsp;([0-9]+)</b>&nbsp;будет через&nbsp;<span class="bold_off color_dis" id="time[0-9]*?">(.*?)</span><script type="text/javascript">.*?"StartCounter":([0-9]+),.*?</script>#ms',$response,$matches,PREG_SET_ORDER);
+      foreach($matches as $match)
+      {
+        $hint = $match[1];
+        $remain = $match[2];
+        $remain_sec = $match[3];
 
-      $hints[$hint] = "До открытия $remain";
-      $remains[$hint] = $remain_sec;
+        $hints[$hint]['text'] = "До открытия $remain";
+        $remains[$hint] = $remain_sec;
+        $hints[$hint]['remain'] = $remain_sec;
+      }
     }
 
     preg_match_all('#<h3>Подсказка ([0-9]+)</h3>(.*?)</p>#sm',$response,$matches,PREG_SET_ORDER);
@@ -139,9 +143,9 @@ function getHints($cookies,$domain,$gameid)
 
     $result = '';
     ksort($hints);
-    foreach($hints as $hint=>$text)
+    foreach($hints as $num=>$hint)
     {
-        $result .= "*$hint*: `$text`\n";
+        $result .= "*$num*: `$hint[text]`\n";
     }
 
     if(!$result)
@@ -172,6 +176,7 @@ function getHints($cookies,$domain,$gameid)
     $array['remains'] = $remains;
     $array['UPsecs'] = $UPsecs;
     $array['levelid'] = $levelId;
+    $array['hints'] = $hints;
 
     return $array;
 }
@@ -272,7 +277,7 @@ function sendCode($cookies,$domain,$gameid,$code)
     }
 
     // Считаем сектора
-    preg_match('#<h3>.*На уровне ([0-9]*) сектора.*?<span class="color_sec">\(осталось закрыть ([0-9]*)\)</span>#ms',$response, $matches);
+    preg_match('#<h3>.*На уровне ([0-9]*) сектор.*?<span class="color_sec">\(осталось закрыть ([0-9]*)\)</span>#ms',$response, $matches);
     
     if($matches) // Если есть результаты - значит на уровне есть сектора
     {
@@ -290,7 +295,7 @@ function sendCode($cookies,$domain,$gameid,$code)
     {
       if($Bonuses[$v[2]]['open'] == false) // Если бонус был не открыт
       {
-        $result .= "\nОткрылся бонус ".trim($v[3]).": $v[5] ($v[4])";
+        $result .= "\nОткрылся бонус ".trim($v[3]).": ".html2text($v[5])." ($v[4])";
       }
     }
 
@@ -341,7 +346,7 @@ function parseCode($text, $chat_id, $sender, $location=Array())
     }
     $sql = "INSERT INTO codeslog (chat_id, level, code, comment, `time`, sender, `return`) VALUES
             (
-                $chat_id, ".intval($settings['last_level_id']).", '".mysqli_escape_string($db, $code)."', '".mysqli_escape_string($db, $comment)."', ".time().", '$sender', -1
+                $chat_id, ".intval($settings['last_level_id']).", '".mysqli_escape_string($db, $code)."', '".mysqli_escape_string($db, $comment)."', ".time().", '$sender', 'NOT SENDED'
             )";
     mysqli_query($db, $sql);
     $result = "Код записан, но не передан в движок";
@@ -384,6 +389,8 @@ function parseCode($text, $chat_id, $sender, $location=Array())
         $result = "Не проходит авторизация на игровом движке";
       } else
       {
+          $sectorstmp = getSectors($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
+          $sectorsBefore = $sectorstmp['sectors'];
           $array = sendCode($cookies,$settings["game_domain"],$settings["game_id"],$code);
           
           
@@ -395,9 +402,24 @@ function parseCode($text, $chat_id, $sender, $location=Array())
         mysqli_query($db, $sql);
         $sql = "INSERT INTO codeslog (chat_id, level, code, comment, `time`, sender, `return`) VALUES
                 (
-                  $chat_id, ".intval($levelId).", '".mysqli_escape_string($db, $code)."', '".mysqli_escape_string($db, $comment)."', ".time().", '$sender', ".intval($array['errno'])."
+                  $chat_id, ".intval($levelId).", '".mysqli_escape_string($db, $code)."', '".mysqli_escape_string($db, $comment)."', ".time().", '$sender', '".mysqli_escape_string($db, $array['result'])."'
                 )";
         mysqli_query($db, $sql);
+
+        $sectorstmp = getSectors($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
+        $sectorsAfter = $sectorstmp['sectors'];
+
+        foreach($sectorsAfter as $num => $code)
+        {
+            if($sectorsBefore[$num])
+            {
+                if($sectorsBefore[$num]['found'] < $code['found']) // Мы открыли код
+                {
+                    $sql = "UPDATE codes SET code_status = 1 WHERE code_number = $num AND chat_id = $settings[chat_id] AND level = $levelId";
+                    mysqli_query($db, $sql);
+                }
+            }
+        }
       }
     }
     return $result;
@@ -415,12 +437,12 @@ function getSectors($cookies,$domain,$gameid)
     curl_close($ch);
 
     // Считаем сектора
-    preg_match('#<h3>.*На уровне ([0-9]*) сектора#ms',$response, $matches);
+    preg_match('#<h3>.*На уровне ([0-9]*) сектор#ms',$response, $matches);
     
     if($matches) // Если есть результаты - значит на уровне есть сектора
     {
       $sectors_total = $matches[1];
-      preg_match('#<h3>.*На уровне ([0-9]*) сектора.*?<span class="color_sec">\(осталось закрыть ([0-9]*)\)</span>#ms', $response, $matches);
+      preg_match('#<h3>.*На уровне ([0-9]*) сектор.*?<span class="color_sec">\(осталось закрыть ([0-9]*)\)</span>#ms', $response, $matches);
       $sectors_rem = intval($matches[2]);
 
       if($sectors_rem == 0)
@@ -428,10 +450,32 @@ function getSectors($cookies,$domain,$gameid)
 
       $sectors_done = $sectors_total-$sectors_rem;
     
-      $result = "На уровне $sectors_total сектора. Закрыто $sectors_done. Осталось закрыть $sectors_rem";
+      $result['text'] = "На уровне $sectors_total сектора. Закрыто $sectors_done. Осталось закрыть $sectors_rem";
+
+      // Закрытые сектора
+      preg_match_all('#<p>(\d+): <span class="color_correct">(.*?)</span> <span class="color_sec">\((.*?) <a href=".*?">(.*?)</a>\)</span></p>#ms', $response, $matches, PREG_SET_ORDER);
+      foreach($matches as $match)
+      {
+        $num = $match[1];
+        $code = $match[2];
+
+        $result['sectors'][$num]['found'] = true;
+        $result['sectors'][$num]['code'] = $code;
+      }
+      // Открытые сектора
+      preg_match_all('#<p>(\d+): <span class="color_dis">код не введён</span></p>#', $response, $matches, PREG_SET_ORDER);
+      foreach($matches as $match)
+      {
+        $num = $match[1];
+        $code = $match[2];
+
+        $result['sectors'][$num]['found'] = false;
+      }
+
+      ksort($result['sectors'], SORT_NUMERIC);
     } else
     {
-      $result = "На уровне нет разделения по секторам";
+      $result['text'] = "На уровне нет разделения по секторам";
     }
 
     return $result;
@@ -474,7 +518,7 @@ function getCoordsFromText($text)
   $result = Array();
    // Ищем в тексте координаты
    $levelTextClean = html2text($text);
-   preg_match_all('#(.*?)[\s:,;\.]?(-?[1-8]?\d(?:\.\d{1,8})?|90(?:\.0{1,8})?)[,\s]+?(-?(?:1[0-7]|[1-9])?\d(?:\.\d{1,8})?|180(?:\.0{1,8})?)#', $levelTextClean, $matches, PREG_SET_ORDER);
+   preg_match_all('#(.*?)[\s:,;\.]?(-?[1-8]?\d(?:\.\d{1,8})?|90(?:\.0{1,8})?)[,\s]+?(-?(?:1[0-7]|[1-9])?\d(?:\.\d{1,8})?|180(?:\.0{1,8})?)#ms', $levelTextClean, $matches, PREG_SET_ORDER);
    foreach($matches as $match)
    {
     $text = $match[0];
@@ -576,7 +620,7 @@ function gameSettingsbyUser($user_id)
   global $db;
   $settings = Array();
   
-  $sql = "SELECT * FROM games WHERE status>0";
+  $sql = "SELECT * FROM games WHERE status>0 AND last_level_id >= 0";
   $result = mysqli_query($db, $sql);
   while($row = mysqli_fetch_assoc($result))
   {

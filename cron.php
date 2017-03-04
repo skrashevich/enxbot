@@ -91,6 +91,46 @@ while($game = mysqli_fetch_assoc($gameresult))
     // Обновляем текущий levelid в базе (на всякий случай)
     $sql = "UPDATE games SET last_level_id = ".intval($array['levelid'])." WHERE game_id = $game[game_id] AND chat_id = $game[chat_id]";
     mysqli_query($db, $sql);
+
+
+    // Работа с секторами (кодами)
+
+    $sql = "SELECT * FROM codes WHERE chat_id = $game[chat_id] AND level = $array[levelid]";
+    $cresult = mysqli_query($db, $sql);
+    while($crow = mysqli_fetch_assoc($cresult))
+    {
+        $sectorsDB[$crow['code_number']]['found'] = $crow['code_status'];
+        $sectorsDB[$crow['code_number']]['id'] = $crow['id'];
+    }
+
+    $sectorsActual = getSectors($game['cookies'],$game["game_domain"],$game["game_id"]);
+    foreach($sectorsActual['sectors'] as $num => $code)
+    {
+        if(!$sectorsDB[$num]) // Если мы еще не видели этого кода
+        {
+            if(!$code['found'])
+            {
+                $sql = "INSERT INTO codes (chat_id, level, time, code_number, code_status)
+                VALUES ($game[chat_id], $array[levelid], ".time().", $num, 0)";
+            } else
+            {
+                $code = mysqli_escape_string($db, $code['code']);
+                $sql = "INSERT INTO codes (chat_id, level, time, code_number, code_status, code)
+                VALUES ($game[chat_id], $array[levelid], ".time().", $num, 1, '$code')";
+            }
+            mysqli_query($db, $sql);
+        } else // Если код мы уже знаем
+        {
+            if($sectorsDB[$num]['found'] < $code['found']) // Мы открыли код
+            {
+                $code = mysqli_escape_string($db, $code['code']);
+                $sql = "UPDATE codes SET code_status = 1, code = '$code' WHERE id = ".$sectorsDB[$num]['id'];
+                mysqli_query($db, $sql);
+
+                apiRequestJSON("sendMessage", array('chat_id' => $game['chat_id'], "parse_mode" => 'Markdown', "text" => "Сектор *$num* закрыт через движок"));
+            }
+        }
+    }
 }
 
 //

@@ -10,6 +10,10 @@ if (php_sapi_name() != 'cli') {
   die('Скрипт должен быть запущен из консоли');
 }
 
+$pid = getmypid();
+$pidfile = BOT_USERNAME.'.pid';
+file_put_contents($pidfile, $pid);
+
 while(true)
 {
     $sql = "SELECT timers.*,games.chat_id,games.cookies,games.game_domain,games.game_id,games.cookies,games.infochannel
@@ -28,13 +32,33 @@ while(true)
             switch($timer['type'])
             {
                 case 1:
-                    $array = getHints($timer['cookies'],$timer["game_domain"],$timer["game_id"]);
-                    $hints = $array['result'];
+                    $array = getHints($timer['cookies'],$timer["game_domain"],$timer["game_id"], true);
+                    $hints = '*'.$timer['hint'].':* '.$array['hints'][$timer['hint']];
                     apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'Markdown', "text" => $hints));
                     if($timer['infochannel'])
                     {
                         apiRequestJSON("sendMessage", array('chat_id' => $timer['infochannel'], "parse_mode" => 'Markdown', "text" => $hints));
                     }
+
+                    $coords = getCoordsFromText($hints);
+                    foreach($coords as $match)
+                    {
+                        $text = $match['text'];
+                        $lat = $match['lat'];
+                        $lon = $match['lon'];
+
+                        $address = $match['address'];
+
+                        apiRequestJSON("sendVenue", array('chat_id' => $timer['chat_id'], "latitude" => $lat, "longitude" => $lon, "title" => $text, "address" => $address));
+                        apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'HTML', "text" => "$lat $lon"));
+
+                        if($timer['infochannel'])
+                        {
+                            apiRequestJSON("sendVenue", array('chat_id' => $timer['infochannel'], "latitude" => $lat, "longitude" => $lon, "title" => $text, "address" => $address));
+                            apiRequestJSON("sendMessage", array('chat_id' => $timer['infochannel'], "parse_mode" => 'HTML', "text" => "$lat $lon"));
+                        }
+                    }
+
                     // Сохраняем скриншот
                     screenshot(false, $timer['chat_id'], $timer['cookies'],$timer["game_domain"],$timer["game_id"],$timer['last_level_id']);
                 break;
@@ -47,7 +71,7 @@ while(true)
 
                     if($timer['infochannel'])
                     {
-                        apiRequestJSON("sendMessage", array('chat_id' => $timer['infochannel'], "parse_mode" => 'Markdown', "text" => $levelText ? $levelText : 'Ошибка получения текста уровня'));
+                        apiRequestJSON("sendMessage", array('chat_id' => $timer['infochannel'], "parse_mode" => 'HTML', "text" => $levelText ? $levelText : 'Ошибка получения текста уровня'));
                     }
 
                     $coords = getCoordsFromText($levelText);
@@ -70,13 +94,13 @@ while(true)
                     }
 
                     // Обновляем LevelID в базе
-                    $array = getHints($game['cookies'],$game["game_domain"],$game["game_id"]);
+                    $array = getHints($timer['cookies'],$timer["game_domain"],$timer["game_id"]);
                     $levelId = $array['levelid'];
                     $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $timer[chat_id]";
                     mysqli_query($db, $sql);
 
                     // Сохраняем скриншот
-                    screenshot(false, $timer['chat_id'], $timer['cookies'],$timer["game_domain"],$timer["game_id"],$timer['last_level_id']);
+                    screenshot(false, $timer['chat_id'], $timer['cookies'],$timer["game_domain"],$timer["game_id"],$levelId);
                 break;
                 default:
                     apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'Markdown', "text" => "*Что-то обновилось*"));
@@ -102,7 +126,7 @@ while(true)
             
             if($row['infochannel'])
             {
-                apiRequestJSON("sendMessage", array('chat_id' => $row['infochannel'], "text" => $levelText ? $levelText : 'Ошибка получения текста уровня'));
+                apiRequestJSON("sendMessage", array('chat_id' => $row['infochannel'], "parse_mode" => 'HTML', "text" => $levelText ? $levelText : 'Ошибка получения текста уровня'));
             }
 
             $coords = getCoordsFromText($levelText);
@@ -123,8 +147,10 @@ while(true)
                     apiRequestJSON("sendMessage", array('chat_id' => $row['infochannel'], "parse_mode" => 'HTML', "text" => "$lat $lon"));
                 }
             }
+            screenshot(false, $row['chat_id'], $row['cookies'],$row["game_domain"],$row["game_id"],$row['last_level_id']);
         }
         $levels[$row['chat_id']]=$row['last_level_id'];
     }
     sleep(1);
 }
+file_put_contents($pidfile, '');

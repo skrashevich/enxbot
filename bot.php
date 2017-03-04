@@ -123,7 +123,7 @@ if(isset($update["message"]))
 
         // Проверяем первый символ
 		$ch=mb_substr($text,0,1);
-		if(in_array($ch,array("/", "&", "#")))
+		if(in_array($ch,array("/", "&", "#", "!")))
         {
             list($command,$args) = explode(' ', $text, 2);
             $args = explode(' ', $args);
@@ -482,7 +482,106 @@ if(isset($update["message"]))
                     {
                         $sectors = getSectors($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
 
-                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "parse_mode" => 'HTML', "text" => $sectors ? $sectors : 'Ошибка'));
+                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "parse_mode" => 'HTML', "text" => $sectors['text'] ? $sectors['text'] : 'Ошибка'));
+                    }
+                break;
+                case '!нко':
+                case '/нко':
+                case '/ohl':
+                    if(!$settings['status'])
+                    {
+                        $result = "Нет активной игры";
+                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
+                    } else 
+                    {
+                        $result = "Незакрытые метки:\n";
+                        $sectors = getSectors($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
+                        foreach($sectors['sectors'] as $num => $code)
+                        {
+                            if(!is_int($num))
+                                continue; // не обрабатываем если это не метка кода
+
+                            if($code['found'])
+                            {
+                                // Ничего не делаем, потому что нужны только незакрытые
+                            } else
+                            {
+                                $result .= "$num\n";
+                            }
+                        }
+                        if(get_setting('optimize_chat', $chat_id)=='true')
+                        {
+                            // Если уже было сообщение с настройками в этом чате, удаляем его
+                            apiRequestJSON("editMessageText", array('chat_id' => $chat_id, 'message_id' => get_setting('last_ohl_message_id', $chat_id), "text" => "..."));
+                        }
+                        $result = apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'Markdown', "text" => $result));
+                        set_setting('last_ohl_message_id', $result['message_id'], $chat_id);
+                    }
+                break;
+                case '!всеко':
+                case '/всеко':
+                case '/allhl':
+                    if(!$settings['status'])
+                    {
+                        $result = "Нет активной игры";
+                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
+                    } else 
+                    {
+                        $result = "Все метки:\n";
+                        $sectors = getSectors($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
+                        foreach($sectors['sectors'] as $num => $code)
+                        {
+                            if(!is_int($num))
+                                continue; // не обрабатываем если это не метка кода
+
+                            if($code['found'])
+                            {
+                                $result .= "*$num:\t$code[code]*\n";
+                            } else
+                            {
+                                $result .= "_$num_\n";
+                            }
+                        }
+                        if(get_setting('optimize_chat', $chat_id)=='true')
+                        {
+                            // Если уже было сообщение с настройками в этом чате, удаляем его
+                            apiRequestJSON("editMessageText", array('chat_id' => $chat_id, 'message_id' => get_setting('last_allhl_message_id', $chat_id), "text" => "..."));
+                        }
+                        $result = apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'Markdown', "text" => $result));
+                        set_setting('last_allhl_message_id', $result['message_id'], $chat_id);
+                    }
+                break;
+                case '!зко':
+                case '/зко':
+                case '/chl':
+                    if(!$settings['status'])
+                    {
+                        $result = "Нет активной игры";
+                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
+                    } else 
+                    {
+                        $result = "Закрытые метки:\n";
+                        $sectors = getSectors($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
+                        foreach($sectors['sectors'] as $num => $code)
+                        {
+                            if(!is_int($num))
+                                continue; // не обрабатываем если это не метка кода
+
+                            if(!$code['found'])
+                            {
+                                // Ничего не делаем, потому что нужны только закрытые
+                            } else
+                            {
+                                $result .= "*$num:\t$code[code]*\n";
+                            }
+                        }
+                        if(get_setting('optimize_chat', $chat_id)=='true')
+                        {
+                            // Если уже было сообщение с настройками в этом чате, удаляем его
+                            apiRequestJSON("editMessageText", array('chat_id' => $chat_id, 'message_id' => get_setting('last_chl_message_id', $chat_id), "text" => "..."));
+                        }
+                        $result = apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'Markdown', "text" => $result));
+                        set_setting('last_chl_message_id', $result['message_id'], $chat_id);
                     }
                 break;
                 case '/messages':
@@ -666,7 +765,7 @@ help - эта справка";
 
             if(!$result)
                 $result = "Ошибка";
-            apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
+            apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "parse_mode" => 'Markdown', "text" => $result));
         }
     }
 
