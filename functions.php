@@ -21,7 +21,8 @@ function auth($domain,$login,$pass)
     
     list($h1, $header, $body) = explode("\r\n\r\n", $response, 3);
 
-    $cookies = '';
+    $cookies = Array();
+    $rawcookies = '';
 
     $authflag = false;
 
@@ -33,16 +34,62 @@ function auth($domain,$login,$pass)
         {
             list($hren, $cookie) = explode(': ',$line,2);
             list($cookie,$hren) = explode('; ',$cookie,2);
+            $rawcookies.="$cookie; ";
+            list($cookiename,$cookieval) = explode('=', $cookie,2);
 
-            $cookies.="$cookie; ";
-            if(substr_count($cookie,'atoken'))
+            $cookies[$cookiename]=$cookieval;
+            if($cookiename == 'atoken')
             {
                 $authflag = true;
             }
         }
     }
 
-    return $authflag ? $cookies : false;
+    if($authflag) // идем на второй этап авторизации
+    {
+      $ch = curl_init('http://'.$domain.'/login/checkcookie?return=%252f');
+      curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+      curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
+      curl_setopt($ch, CURLOPT_HEADER, true);
+      curl_setopt($ch, CURLOPT_COOKIE, $rawcookies);
+
+      // execute!
+      $response = curl_exec($ch);
+
+      // close the connection, release resources used
+      curl_close($ch);
+      
+      list($h1, $header, $body) = explode("\r\n\r\n", $response, 3);
+
+      $hlines = explode("\n",$header);
+      foreach($hlines as $line)
+      {
+          $line = trim($line);
+          if(strpos($line,'Set-Cookie: ')===0)
+          {
+              list($hren, $cookie) = explode(': ',$line,2);
+              list($cookie,$hren) = explode('; ',$cookie,2);
+              list($cookiename,$cookieval) = explode('=', $cookie,2);
+
+              $cookies[$cookiename]=$cookieval;
+              if($cookiename == 'stoken')
+              {
+                  $authflag = true;
+              } else
+              {
+                  $authflag = false;
+              }
+          }
+      }
+    }
+
+    $rawcookies = '';
+    foreach($cookies as $k=>$v)
+    {
+        $rawcookies .= "$k=$v; ";
+    }
+
+    return $authflag ? $rawcookies : false;
 }
 
 function testGame($cookies,$domain,$gameid)
@@ -179,6 +226,26 @@ function getHints($cookies,$domain,$gameid,$onlyOpen=false)
     $array['hints'] = $hints;
 
     return $array;
+}
+
+function getScheme($cookies,$city,$gamepin)
+{
+    $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_COOKIE, $cookies);
+
+    $response = curl_exec($ch);
+
+    // close the connection, release resources used
+    curl_close($ch);
+    
+    // Вычленяем текст задания
+
+    preg_match('#<img src="(.*?)"#ms',$response,$matches);
+
+    $imgLink = $matches[1];
+
+    return $imgLink;
 }
 
 function sendCode($cookies,$domain,$gameid,$code)

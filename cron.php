@@ -46,45 +46,48 @@ while($game = mysqli_fetch_assoc($gameresult))
     //
     $array = getHints($game['cookies'],$game["game_domain"],$game["game_id"]);
     
-    // Смотрим, есть ли уже таймеры на подсказки
-    $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=1";
-    $result = mysqli_query($db, $sql);
-    if(mysqli_num_rows($result)!=count($array['remains']))
+    if($array['levelid'] > 0)
     {
-        print "Подсказки на игре $game[game_id] на уровне $array[levelid] обновились\n";
-        $sql="DELETE FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=1 AND ABS('.time().'-`time`)>60";
-        mysqli_query($db, $sql);
-
-        // Забиваем подсказки в базу заново
-        foreach($array['remains'] as $hint=>$secs)
-        {
-            $sql="INSERT INTO timers (game_id, chat_id, level_id, hint, time, type) VALUES ($game[game_id], $game[chat_id], ".intval($array['levelid']).", $hint, ".(time()+$secs).", 1)";
-            $result = mysqli_query($db, $sql);
-        }
-    } else {
-        // Обновляем подсказки в базе на всякий случай
-        foreach($array['remains'] as $hint=>$secs)
-        {
-            $sql="UPDATE timers SET time= ".(time()+$secs)." WHERE game_id = $game[game_id] AND chat_id = $game[chat_id] AND level_id = ".intval($array['levelid'])." AND hint=$hint";
-            $result = mysqli_query($db, $sql);
-        }
-    }
-
-    if($array['UPsecs']>0)
-    {
-        // Проверяем наличие таймера на АП
-        $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=2";
+        // Смотрим, есть ли уже таймеры на подсказки
+        $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=1";
         $result = mysqli_query($db, $sql);
-
-        if(mysqli_num_rows($result)>0)
+        if(mysqli_num_rows($result)!=count($array['remains']))
         {
-            // Обновляем время АП на всякий случай
-            $sql="UPDATE timers SET time= ".(time()+$array['UPsecs'])." WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=2";
-            $result = mysqli_query($db, $sql);
+            print "Подсказки на игре $game[game_id] на уровне $array[levelid] обновились\n";
+            $sql="DELETE FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=1 AND ABS('.time().'-`time`)>60";
+            mysqli_query($db, $sql);
+
+            // Забиваем подсказки в базу заново
+            foreach($array['remains'] as $hint=>$secs)
+            {
+                $sql="INSERT INTO timers (game_id, chat_id, level_id, hint, time, type) VALUES ($game[game_id], $game[chat_id], ".intval($array['levelid']).", $hint, ".(time()+$secs).", 1)";
+                $result = mysqli_query($db, $sql);
+            }
         } else {
-            // Добавляем АП в базу
-            $sql="INSERT INTO timers (game_id, chat_id, level_id, hint, time, type) VALUES ($game[game_id], $game[chat_id], ".intval($array['levelid']).", 0, ".(time()+$array['UPsecs']).", 2)";
+            // Обновляем подсказки в базе на всякий случай
+            foreach($array['remains'] as $hint=>$secs)
+            {
+                $sql="UPDATE timers SET time= ".(time()+$secs)." WHERE game_id = $game[game_id] AND chat_id = $game[chat_id] AND level_id = ".intval($array['levelid'])." AND hint=$hint";
+                $result = mysqli_query($db, $sql);
+            }
+        }
+
+        if($array['UPsecs']>0)
+        {
+            // Проверяем наличие таймера на АП
+            $sql = "SELECT * FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=2";
             $result = mysqli_query($db, $sql);
+
+            if(mysqli_num_rows($result)>0)
+            {
+                // Обновляем время АП на всякий случай
+                $sql="UPDATE timers SET time= ".(time()+$array['UPsecs'])." WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=2";
+                $result = mysqli_query($db, $sql);
+            } else {
+                // Добавляем АП в базу
+                $sql="INSERT INTO timers (game_id, chat_id, level_id, hint, time, type) VALUES ($game[game_id], $game[chat_id], ".intval($array['levelid']).", 0, ".(time()+$array['UPsecs']).", 2)";
+                $result = mysqli_query($db, $sql);
+            }
         }
     }
 
