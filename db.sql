@@ -1,80 +1,116 @@
-# Дамп таблицы admins
-# ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS admins (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  admin_username TEXT
+);
 
-CREATE TABLE `admins` (
-  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `admin_username` varchar(255) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+CREATE TABLE IF NOT EXISTS games (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER,
+  game_id INTEGER,
+  game_domain TEXT,
+  game_login TEXT,
+  game_pass TEXT,
+  cookies TEXT,
+  last_level_id INTEGER NOT NULL DEFAULT 0,
+  status INTEGER,
+  payment REAL NOT NULL DEFAULT 0,
+  infochannel TEXT
+);
 
+CREATE TABLE IF NOT EXISTS log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  time INTEGER,
+  message_id INTEGER,
+  chat_id INTEGER,
+  chat_title TEXT,
+  text TEXT,
+  type INTEGER,
+  sender_id INTEGER,
+  sender_username TEXT
+);
+CREATE INDEX IF NOT EXISTS log_chatid ON log (chat_id);
 
+CREATE TABLE IF NOT EXISTS queue (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  send_at INTEGER,
+  added INTEGER,
+  method TEXT,
+  parameters TEXT,
+  parsed INTEGER
+);
+CREATE INDEX IF NOT EXISTS queue_send_at ON queue (send_at);
+CREATE INDEX IF NOT EXISTS queue_parsed ON queue (parsed);
 
-# Дамп таблицы games
-# ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS timers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER,
+  game_id INTEGER,
+  level_id INTEGER,
+  hint INTEGER,
+  time INTEGER,
+  type INTEGER
+);
 
-CREATE TABLE `games` (
-  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `chat_id` bigint(11) DEFAULT NULL,
-  `game_id` int(5) unsigned DEFAULT NULL,
-  `game_domain` varchar(255) DEFAULT NULL,
-  `game_login` varchar(255) DEFAULT NULL,
-  `game_pass` varchar(255) DEFAULT NULL,
-  `cookies` text,
-  `last_level_id` int(11) NOT NULL DEFAULT '0',
-  `status` tinyint(1) unsigned DEFAULT NULL,
-  `payment` smallint(5) unsigned NOT NULL DEFAULT '0',
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+CREATE TABLE IF NOT EXISTS settings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER NOT NULL DEFAULT 0,
+  name TEXT,
+  value TEXT
+);
+CREATE INDEX IF NOT EXISTS settings_chat_name ON settings (chat_id, name);
 
+CREATE TABLE IF NOT EXISTS codes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER,
+  level INTEGER,
+  time INTEGER,
+  code_number INTEGER,
+  code_status INTEGER NOT NULL DEFAULT 0,
+  code TEXT
+);
+CREATE INDEX IF NOT EXISTS codes_chat_level ON codes (chat_id, level);
 
+CREATE TABLE IF NOT EXISTS codeslog (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER,
+  level INTEGER,
+  code TEXT,
+  comment TEXT,
+  time INTEGER,
+  sender TEXT,
+  return TEXT
+);
+CREATE INDEX IF NOT EXISTS codeslog_chat_level ON codeslog (chat_id, level);
 
-# Дамп таблицы log
-# ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS locations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER,
+  time INTEGER,
+  sender_username TEXT,
+  sender_name TEXT,
+  lat REAL,
+  lon REAL,
+  title TEXT,
+  level INTEGER,
+  type INTEGER
+);
 
-CREATE TABLE `log` (
-  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `time` int(11) unsigned DEFAULT NULL,
-  `message_id` int(11) DEFAULT NULL,
-  `chat_id` bigint(11) DEFAULT NULL,
-  `chat_title` varchar(255) DEFAULT NULL,
-  `text` text,
-  `type` tinyint(1) unsigned DEFAULT NULL COMMENT '1 - код, 2  - команда, 3 - текст',
-  `sender_id` int(11) DEFAULT NULL,
-  `sender_username` varchar(255) DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  KEY `chatid` (`chat_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+CREATE TABLE IF NOT EXISTS geocache (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lat REAL,
+  lon REAL,
+  added INTEGER,
+  address TEXT
+);
+CREATE INDEX IF NOT EXISTS geocache_latlon ON geocache (lat, lon);
 
-
-
-# Дамп таблицы queue
-# ------------------------------------------------------------
-
-CREATE TABLE `queue` (
-  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `send_at` int(11) unsigned DEFAULT NULL,
-  `added` int(11) unsigned DEFAULT NULL,
-  `method` varchar(11) DEFAULT NULL,
-  `parameters` text,
-  `parsed` tinyint(1) unsigned DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  KEY `send_at` (`send_at`),
-  KEY `parsed` (`parsed`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-
-
-# Дамп таблицы timers
-# ------------------------------------------------------------
-
-CREATE TABLE `timers` (
-  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `chat_id` bigint(11) DEFAULT NULL,
-  `game_id` int(5) unsigned DEFAULT NULL,
-  `level_id` int(11) DEFAULT NULL,
-  `hint` tinyint(1) unsigned DEFAULT NULL,
-  `time` int(11) unsigned DEFAULT NULL,
-  `type` tinyint(1) DEFAULT NULL COMMENT '1 - подскзка, 2 - АП',
-  PRIMARY KEY (`id`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8;
-
+CREATE TABLE IF NOT EXISTS directionscache (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lat1 REAL,
+  lon1 REAL,
+  lat2 REAL,
+  lon2 REAL,
+  added INTEGER,
+  length REAL,
+  time REAL
+);

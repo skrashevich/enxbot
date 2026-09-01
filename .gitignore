@@ -4,4 +4,7 @@ test.php
 config.php
 screens/
 *.pid
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 .omc/

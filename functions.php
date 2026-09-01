@@ -357,11 +357,11 @@ function sendCode($cookies,$domain,$gameid,$code)
 function parseCode($text, $chat_id, $sender, $location=Array())
 {
   global $db;
-  $sender = mysqli_escape_string($db, (string)$sender);
+  $sender = db_escape($db, (string)$sender);
   $chat_id = intval($chat_id);
   $sql = "SELECT * FROM games WHERE chat_id = $chat_id";
-  $sqlresult = mysqli_query($db, $sql);
-  $settings = mysqli_fetch_assoc($sqlresult);
+  $sqlresult = db_query($db, $sql);
+  $settings = db_fetch_assoc($sqlresult);
 
   if(!$settings || !$settings['status'])
   {
@@ -399,9 +399,9 @@ function parseCode($text, $chat_id, $sender, $location=Array())
     // Заносим код в лог но не пробиваем его
     $sql = "INSERT INTO codeslog (chat_id, level, code, comment, `time`, sender, `return`) VALUES
             (
-                $chat_id, ".intval($settings['last_level_id']).", '".mysqli_escape_string($db, $code)."', '".mysqli_escape_string($db, $comment)."', ".time().", '$sender', 'NOT SENDED'
+                $chat_id, ".intval($settings['last_level_id']).", '".db_escape($db, $code)."', '".db_escape($db, $comment)."', ".time().", '$sender', 'NOT SENDED'
             )";
-    mysqli_query($db, $sql);
+    db_query($db, $sql);
 
     return "Код записан, но не передан в движок";
   }
@@ -412,8 +412,8 @@ function parseCode($text, $chat_id, $sender, $location=Array())
     $cookies = auth($settings["game_domain"], $settings["game_login"], $settings["game_pass"]);
     if($cookies !== false)
     {
-      $sql = "UPDATE games SET cookies = '".mysqli_escape_string($db, $cookies)."' WHERE chat_id = $settings[chat_id]";
-      mysqli_query($db, $sql);
+      $sql = "UPDATE games SET cookies = '".db_escape($db, $cookies)."' WHERE chat_id = $settings[chat_id]";
+      db_query($db, $sql);
     }
   }
   else
@@ -437,13 +437,13 @@ function parseCode($text, $chat_id, $sender, $location=Array())
   if($levelId > 0 || $levelId == -1)
   {
     $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $settings[chat_id]";
-    mysqli_query($db, $sql);
+    db_query($db, $sql);
   }
   $sql = "INSERT INTO codeslog (chat_id, level, code, comment, `time`, sender, `return`) VALUES
           (
-            $chat_id, ".intval($levelId).", '".mysqli_escape_string($db, $code)."', '".mysqli_escape_string($db, $comment)."', ".time().", '$sender', '".mysqli_escape_string($db, $result)."'
+            $chat_id, ".intval($levelId).", '".db_escape($db, $code)."', '".db_escape($db, $comment)."', ".time().", '$sender', '".db_escape($db, $result)."'
           )";
-  mysqli_query($db, $sql);
+  db_query($db, $sql);
 
   $sectorstmp = getSectors($cookies,$settings["game_domain"],$settings["game_id"]);
   $sectorsAfter = $sectorstmp['sectors'];
@@ -454,7 +454,7 @@ function parseCode($text, $chat_id, $sender, $location=Array())
       if(isset($sectorsBefore[$num]) && $sectorsBefore[$num]['found'] < $sector['found'])
       {
           $sql = "UPDATE codes SET code_status = 1 WHERE code_number = ".intval($num)." AND chat_id = $settings[chat_id] AND level = ".intval($levelId);
-          mysqli_query($db, $sql);
+          db_query($db, $sql);
       }
   }
 
@@ -554,14 +554,14 @@ function get_setting($name, $chat_id=0)
 {
   global $db;
   $chat_id = intval($chat_id);
-  $name = mysqli_escape_string($db, (string)$name);
+  $name = db_escape($db, (string)$name);
   $sql="SELECT * FROM settings WHERE chat_id = $chat_id AND name = '$name' LIMIT 1";
-  $result = mysqli_query($db, $sql);
-  if(mysqli_num_rows($result)==0)
+  $result = db_query($db, $sql);
+  if(db_num_rows($result)==0)
   {
     return false;
   }
-  $row = mysqli_fetch_assoc($result);
+  $row = db_fetch_assoc($result);
   $value = $row['value'];
   return $value;
 }
@@ -571,8 +571,8 @@ function set_setting($name,$value,$chat_id=0)
   $chat_id = intval($chat_id);
   $exists = get_setting($name, $chat_id) !== false;
 
-  $name = mysqli_escape_string($db, (string)$name);
-  $value = mysqli_escape_string($db, (string)$value);
+  $name = db_escape($db, (string)$name);
+  $value = db_escape($db, (string)$value);
 
   if(!$exists)
   {
@@ -581,7 +581,7 @@ function set_setting($name,$value,$chat_id=0)
   {
     $sql = "UPDATE settings SET value = '$value' WHERE name = '$name' AND chat_id = $chat_id";
   }
-  mysqli_query($db, $sql);
+  db_query($db, $sql);
 
   return true;
 }
@@ -607,10 +607,10 @@ function geocoder($lat, $lon)
 
   // Проверяем наличие координат в кэше
   $sql = "SELECT * FROM geocache WHERE lat=$lat AND lon=$lon";
-  $result = mysqli_query($db, $sql);
-  if(mysqli_num_rows($result)>0)
+  $result = db_query($db, $sql);
+  if(db_num_rows($result)>0)
   {
-    $cacherow = mysqli_fetch_assoc($result);
+    $cacherow = db_fetch_assoc($result);
     return $cacherow['address'];
   }
 
@@ -637,8 +637,8 @@ function geocoder($lat, $lon)
   $address = $feature['GeoObject']['metaDataProperty']['GeocoderMetaData']['text'];
 
   // Добавляем адрес в кэш
-  $sql = "INSERT INTO geocache (lat,lon,added,address) VALUES ($lat, $lon, ".time().", '".mysqli_escape_string($db, $address)."')";
-  mysqli_query($db, $sql);
+  $sql = "INSERT INTO geocache (lat,lon,added,address) VALUES ($lat, $lon, ".time().", '".db_escape($db, $address)."')";
+  db_query($db, $sql);
 
   return $address;
 }
@@ -656,8 +656,8 @@ function gameSettingsbyUser($user_id)
   $settings = Array();
 
   $sql = "SELECT * FROM games WHERE status>0 AND last_level_id >= 0";
-  $result = mysqli_query($db, $sql);
-  while($row = mysqli_fetch_assoc($result))
+  $result = db_query($db, $sql);
+  while($row = db_fetch_assoc($result))
   {
     $chatMember = apiRequestJSON("getChatMember", array('chat_id' => $row['chat_id'], "user_id" => $user_id));
     if(!is_array($chatMember) || !isset($chatMember['status']))
@@ -681,10 +681,10 @@ function navi($lat1,$lon1,$lat2,$lon2,$engine='yandex',$expire = 600)
   global $db;
   // Проверяем наличие данных в кэше
   $sql = "SELECT * FROM directionscache WHERE lat1=$lat1 AND lon1=$lon1 AND lat2=$lat2 AND lon2=$lon2 AND added>".(time()-$expire);
-  $sqlresult = mysqli_query($db, $sql);
-  if(mysqli_num_rows($sqlresult)>0)
+  $sqlresult = db_query($db, $sql);
+  if(db_num_rows($sqlresult)>0)
   {
-      $row = mysqli_fetch_assoc($sqlresult);
+      $row = db_fetch_assoc($sqlresult);
       $result = Array(
         'length' => $row['length'],
         'time' => $row['time'],
@@ -739,7 +739,7 @@ function navi($lat1,$lon1,$lat2,$lon2,$engine='yandex',$expire = 600)
 
     $sql = "INSERT INTO directionscache (lat1,lon1,lat2,lon2,added,length,time)
     VALUES ($lat1, $lon1, $lat2, $lon2,".time().",$length,$time)";
-    mysqli_query($db,$sql);
+    db_query($db,$sql);
   }
   return $result;
 }
@@ -812,9 +812,9 @@ function logMessage($message, $type=0)
     $message_id = intval(isset($message['message_id']) ? $message['message_id'] : 0);
     $chat_id    = intval(isset($message['chat']['id']) ? $message['chat']['id'] : 0);
     $sender_id  = intval(isset($message['from']['id']) ? $message['from']['id'] : 0);
-    $chat_title = mysqli_escape_string($db, isset($message['chat']['title']) ? $message['chat']['title'] : '');
-    $text       = mysqli_escape_string($db, isset($message['text']) ? $message['text'] : '');
-    $username   = mysqli_escape_string($db, isset($message['from']['username']) ? $message['from']['username'] : '');
+    $chat_title = db_escape($db, isset($message['chat']['title']) ? $message['chat']['title'] : '');
+    $text       = db_escape($db, isset($message['text']) ? $message['text'] : '');
+    $username   = db_escape($db, isset($message['from']['username']) ? $message['from']['username'] : '');
 
     $sql = "INSERT INTO log (time, message_id, chat_id, chat_title, text, type, sender_id, sender_username)
     VALUES (
@@ -828,7 +828,7 @@ function logMessage($message, $type=0)
         '$username'
     )
     ";
-    mysqli_query($db, $sql);
+    db_query($db, $sql);
     return true;
 }
 

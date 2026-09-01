@@ -27,8 +27,8 @@ while(true)
             AND games.chat_id = timers.chat_id
             AND timers.game_id = games.game_id
             AND timers.time <= ".time();
-    $sqlresult = mysqli_query($db, $sql);
-    while($timer = mysqli_fetch_assoc($sqlresult))
+    $sqlresult = db_query($db, $sql);
+    while($timer = db_fetch_assoc($sqlresult))
     {
         $secs = time()-$timer['time'];
         if($secs >= 2)
@@ -106,7 +106,7 @@ while(true)
                     if($levelId > 0)
                     {
                         $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $timer[chat_id]";
-                        mysqli_query($db, $sql);
+                        db_query($db, $sql);
                     }
 
                     // Сохраняем скриншот
@@ -117,14 +117,14 @@ while(true)
                 break;
             }
             $sql="DELETE FROM timers WHERE id=$timer[id]";
-            mysqli_query($db, $sql);
+            db_query($db, $sql);
         }
     }
 
     // Смотрим в базе изменение ID уровня. Если поменялся, значит АП мимо бота и надо об этом сообщить.
     $sql="SELECT * FROM games WHERE status>0 AND last_level_id>0";
-    $result = mysqli_query($db, $sql);
-    while($row = mysqli_fetch_assoc($result))
+    $result = db_query($db, $sql);
+    while($row = db_fetch_assoc($result))
     {
         $knownLevel = isset($levels[$row['chat_id']]) ? $levels[$row['chat_id']] : 0;
         if( $knownLevel && $row['last_level_id'] != $knownLevel )
