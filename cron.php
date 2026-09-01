@@ -1,5 +1,6 @@
 <?php
-error_reporting(E_ALL & ~(E_STRICT|E_NOTICE));
+// E_STRICT удалён как уровень ошибок и объявлен deprecated в PHP 8.4
+error_reporting(E_ALL & ~E_NOTICE);
 
 include('config.php');
 include('db.php');
@@ -54,7 +55,7 @@ while($game = mysqli_fetch_assoc($gameresult))
         if(mysqli_num_rows($result)!=count($array['remains']))
         {
             print "Подсказки на игре $game[game_id] на уровне $array[levelid] обновились\n";
-            $sql="DELETE FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=1 AND ABS('.time().'-`time`)>60";
+            $sql="DELETE FROM timers WHERE game_id = $game[game_id] AND level_id = ".intval($array['levelid'])." AND chat_id = $game[chat_id] AND type=1 AND ABS(".time()."-`time`)>60";
             mysqli_query($db, $sql);
 
             // Забиваем подсказки в базу заново
@@ -91,47 +92,55 @@ while($game = mysqli_fetch_assoc($gameresult))
         }
     }
 
-    // Обновляем текущий levelid в базе (на всякий случай)
-    $sql = "UPDATE games SET last_level_id = ".intval($array['levelid'])." WHERE game_id = $game[game_id] AND chat_id = $game[chat_id]";
-    mysqli_query($db, $sql);
-
+    // Обновляем текущий levelid в базе (на всякий случай).
+    // При сбое движка getHints() возвращает -1; записывать его нельзя, иначе
+    // игра перестанет попадать в выборку "last_level_id >= 0" и бот её потеряет.
+    if($array['levelid'] > 0)
+    {
+        $sql = "UPDATE games SET last_level_id = ".intval($array['levelid'])." WHERE game_id = $game[game_id] AND chat_id = $game[chat_id]";
+        mysqli_query($db, $sql);
+    }
 
     // Работа с секторами (кодами)
 
-    $sql = "SELECT * FROM codes WHERE chat_id = $game[chat_id] AND level = $array[levelid]";
+    // Состояние секторов накапливается отдельно для каждой игры
+    $sectorsDB = Array();
+    $levelid = intval($array['levelid']);
+
+    $sql = "SELECT * FROM codes WHERE chat_id = $game[chat_id] AND level = $levelid";
     $cresult = mysqli_query($db, $sql);
     while($crow = mysqli_fetch_assoc($cresult))
     {
-        $sectorsDB[$crow['code_number']]['found'] = $crow['code_status'];
-        $sectorsDB[$crow['code_number']]['id'] = $crow['id'];
+        $sectorsDB[$crow['code_number']] = Array(
+            'found' => $crow['code_status'],
+            'id' => $crow['id'],
+        );
     }
 
     $sectorsActual = getSectors($game['cookies'],$game["game_domain"],$game["game_id"]);
-    foreach($sectorsActual['sectors'] as $num => $code)
+    foreach($sectorsActual['sectors'] as $num => $sector)
     {
-        if(!$sectorsDB[$num]) // Если мы еще не видели этого кода
+        $num = intval($num);
+        $code = mysqli_escape_string($db, $sector['code']);
+
+        if(!isset($sectorsDB[$num])) // Если мы еще не видели этого кода
         {
-            if(!$code['found'])
+            if(!$sector['found'])
             {
                 $sql = "INSERT INTO codes (chat_id, level, time, code_number, code_status)
-                VALUES ($game[chat_id], $array[levelid], ".time().", $num, 0)";
+                VALUES ($game[chat_id], $levelid, ".time().", $num, 0)";
             } else
             {
-                $code = mysqli_escape_string($db, $code['code']);
                 $sql = "INSERT INTO codes (chat_id, level, time, code_number, code_status, code)
-                VALUES ($game[chat_id], $array[levelid], ".time().", $num, 1, '$code')";
+                VALUES ($game[chat_id], $levelid, ".time().", $num, 1, '$code')";
             }
             mysqli_query($db, $sql);
-        } else // Если код мы уже знаем
+        } else if($sectorsDB[$num]['found'] < $sector['found']) // Если код мы уже знаем и только что открыли
         {
-            if($sectorsDB[$num]['found'] < $code['found']) // Мы открыли код
-            {
-                $code = mysqli_escape_string($db, $code['code']);
-                $sql = "UPDATE codes SET code_status = 1, code = '$code' WHERE id = ".$sectorsDB[$num]['id'];
-                mysqli_query($db, $sql);
+            $sql = "UPDATE codes SET code_status = 1, code = '$code' WHERE id = ".intval($sectorsDB[$num]['id']);
+            mysqli_query($db, $sql);
 
-                apiRequestJSON("sendMessage", array('chat_id' => $game['chat_id'], "parse_mode" => 'Markdown', "text" => "Сектор *$num* закрыт через движок"));
-            }
+            apiRequestJSON("sendMessage", array('chat_id' => $game['chat_id'], "parse_mode" => 'Markdown', "text" => "Сектор *$num* закрыт через движок"));
         }
     }
 }

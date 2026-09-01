@@ -2,3 +2,6 @@
 tmp
 test.php
 config.php
+screens/
+*.pid
+.omc/

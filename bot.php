@@ -1,5 +1,6 @@
 <?php
-error_reporting(E_ALL & ~(E_STRICT|E_NOTICE));
+// E_STRICT удалён как уровень ошибок и объявлен deprecated в PHP 8.4
+error_reporting(E_ALL & ~E_NOTICE);
 
 include('config.php');
 include('db.php');
@@ -97,10 +98,12 @@ if(isset($update["message"]))
         $text=$message["text"];
 		$message_id=$message['message_id'];
 		$chat_id=$message['chat']['id'];
+		// У пользователей без username Telegram поле не присылает
+		$from_username = isset($message['from']['username']) ? $message['from']['username'] : '';
 
         $sql = "SELECT * FROM games WHERE chat_id = $chat_id";
         $result = mysqli_query($db, $sql);
-        if(mysqli_error($db))
+        if(!$result)
         {
             apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => 'Ошибка подключения к БД'));
             die();
@@ -108,11 +111,17 @@ if(isset($update["message"]))
         if(mysqli_num_rows($result)===0)
         {
             $sql = "INSERT INTO games (chat_id) VALUES (".intval($chat_id).")";
-            $result = mysqli_query($db, $sql);
+            mysqli_query($db, $sql);
             $sql = "SELECT * FROM games WHERE chat_id = $chat_id";
             $result = mysqli_query($db, $sql);
         }
         $settings = mysqli_fetch_assoc($result);
+        if(!$settings)
+        {
+            $settings = Array();
+        }
+        $settings += Array('chat_id' => $chat_id, 'game_id' => 0, 'status' => 0, 'payment' => 0, 'cookies' => '', 'game_domain' => '', 'game_login' => '', 'game_pass' => '', 'last_level_id' => 0, 'infochannel' => '');
+        $settings['admins'] = Array();
 
         $sql = "SELECT * FROM admins";
         $result = mysqli_query($db, $sql);
@@ -125,8 +134,12 @@ if(isset($update["message"]))
 		$ch=mb_substr($text,0,1);
 		if(in_array($ch,array("/", "&", "#", "!")))
         {
-            list($command,$args) = explode(' ', $text, 2);
-            $args = explode(' ', $args);
+            $parts = explode(' ', $text, 2);
+            $command = $parts[0];
+            $args = explode(' ', isset($parts[1]) ? $parts[1] : '');
+            // Гарантируем наличие $args[0..2], чтобы обращения к аргументам
+            // не приводили к Warning "Undefined array key" на PHP 8
+            $args = array_pad($args, 3, '');
 
             // for commands like /level@enxbot
             $command = str_replace('@'.BOT_USERNAME, '', $command);
@@ -141,7 +154,11 @@ if(isset($update["message"]))
             {
                 $tmpsettings = gameSettingsbyUser($chat_id);
                 if(count($tmpsettings))
+                {
+                    // Список администраторов не относится к конкретной игре, сохраняем его
+                    $tmpsettings['admins'] = $settings['admins'];
                     $settings = $tmpsettings;
+                }
             }
 
             switch($command)
@@ -180,6 +197,11 @@ if(isset($update["message"]))
                         break;
                         case 'pass':
                             $clear_pass = decrypt($args[1], ENCRYPTION_KEY);
+                            if($clear_pass === false)
+                            {
+                                apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Не удалось расшифровать пароль. Получите его заново командой /encrypt в личке боту"));
+                                break;
+                            }
                             $clear_pass = trim($clear_pass);
                             $sql = "UPDATE games SET game_pass = '".mysqli_escape_string($db, $clear_pass)."' WHERE chat_id = $chat_id";
                             mysqli_query($db, $sql);
@@ -205,7 +227,7 @@ if(isset($update["message"]))
                         case 'start':
                             if($settings['payment']>=PAYMENT_SUM)
                             {
-                                if( (in_array($message['from']['username'], $settings['admins']) && PAYMENT_SUM==-1) || ( $settings['payment'] >= PAYMENT_SUM && PAYMENT_SUM >=0) )
+                                if( (in_array($from_username, $settings['admins']) && PAYMENT_SUM==-1) || ( $settings['payment'] >= PAYMENT_SUM && PAYMENT_SUM >=0) )
                                 {
                                     $sql = "UPDATE games SET status = 1 WHERE chat_id = $chat_id";
                                     mysqli_query($db, $sql);
@@ -220,7 +242,7 @@ if(isset($update["message"]))
                             }
                         break;
                         case 'stop':
-                            if( (in_array($message['from']['username'], $settings['admins']) && PAYMENT_SUM==-1) || ( $settings['payment'] >= PAYMENT_SUM && PAYMENT_SUM >=0) )
+                            if( (in_array($from_username, $settings['admins']) && PAYMENT_SUM==-1) || ( $settings['payment'] >= PAYMENT_SUM && PAYMENT_SUM >=0) )
                             {
                                 $sql = "UPDATE games SET status = 0 WHERE chat_id = $chat_id";
                                 mysqli_query($db, $sql);
@@ -231,7 +253,7 @@ if(isset($update["message"]))
                             }
                         break;
                         case 'delete':
-                            if( (in_array($message['from']['username'], $settings['admins']) && PAYMENT_SUM==-1) || ( $settings['payment'] >= PAYMENT_SUM && PAYMENT_SUM >=0) )
+                            if( (in_array($from_username, $settings['admins']) && PAYMENT_SUM==-1) || ( $settings['payment'] >= PAYMENT_SUM && PAYMENT_SUM >=0) )
                             {
                                 $sql="DELETE FROM games WHERE chat_id = $chat_id";
                                 mysqli_query($db, $sql);
@@ -251,7 +273,7 @@ if(isset($update["message"]))
                             $infochannel = mysqli_escape_string($db, $args[1]);
 		                    if(in_array(mb_substr($infochannel,0,1),array('-', '@')))
                             {
-                                $sql = "UPDATE games SET infochannel=$infochannel WHERE chat_id = $chat_id";
+                                $sql = "UPDATE games SET infochannel='$infochannel' WHERE chat_id = $chat_id";
                                 mysqli_query($db, $sql);
                                 apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => "Установлен ID инфоканала $infochannel"));
                             } else
@@ -338,12 +360,17 @@ if(isset($update["message"]))
                                     while($row = mysqli_fetch_assoc($sqlresult))
                                     {
                                         $result .="$row[sender] - $row[cnt]\n";
-                                        $total += $row[cnt];
+                                        $total += $row['cnt'];
                                     }
                                     $result .= "Всего пробито через бота: $total кодов";
                                     apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
                                 break;
                                 case 'map':
+                                    if(!defined('LOCATION_MAP_GAMENAME'))
+                                    {
+                                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => "Карта не настроена: не задана константа LOCATION_MAP_GAMENAME в config.php"));
+                                        break;
+                                    }
                                     $buttons = Array(Array(Array('text' => 'Открыть в новой вкладке', 'callback_game' => Array())));
                                     $keyboard = Array('inline_keyboard' => $buttons);
                                     apiRequestJSON("sendGame",
@@ -372,8 +399,13 @@ if(isset($update["message"]))
                     {
                         $img = getScheme($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
 
-
-                        apiRequestJSON("sendPhoto", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "photo" => $img));
+                        if($img === false)
+                        {
+                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Схема не найдена"));
+                        } else
+                        {
+                            apiRequestJSON("sendPhoto", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "photo" => $img));
+                        }
                     }
                 break;
                 case '/settings':
@@ -385,8 +417,11 @@ if(isset($update["message"]))
                     $buttons = getSettingsButtons($chat_id);
                     $keyboard = Array('inline_keyboard' => $buttons);
                     $result = apiRequestJSON("sendMessage", array('chat_id' => $chat_id, 'reply_markup' => json_encode($keyboard), "text" => "Настройки игры"));
-                    
-                    set_setting('last_settings_message_id', $result['message_id'], $chat_id);
+
+                    if(isset($result['message_id']))
+                    {
+                        set_setting('last_settings_message_id', $result['message_id'], $chat_id);
+                    }
                 break;
                 case '/level':
                     if(!$settings['status'])
@@ -435,6 +470,12 @@ if(isset($update["message"]))
                         screenshot(true, $settings['chat_id'], $settings['cookies'],$settings["game_domain"],$settings["game_id"],$settings['last_level_id']);
                 break;
                 case '/getscreens':
+                    // Без каталога DirectoryIterator бросает UnexpectedValueException
+                    if(!is_dir('screens'))
+                    {
+                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Скриншотов пока нет"));
+                        break;
+                    }
                     $levelid = intval($args[0]);
                     if($levelid <= 0)
                     {
@@ -444,10 +485,11 @@ if(isset($update["message"]))
                     $zip = new ZipArchive;
                     $archivename = 'screens/'.abs($settings['chat_id']).'.'.$levelid.'.zip';
                     $res = $zip->open($archivename, ZipArchive::CREATE);
-                    
+
                     if ($res !== true)
                     {
                         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Ошибка инициализации модуля архивации"));
+                        break;
                     }
 
                     foreach (new DirectoryIterator('screens') as $fileInfo)
@@ -455,7 +497,7 @@ if(isset($update["message"]))
                         if($fileInfo->isDot()) continue;
 
                         $fname = $fileInfo->getFilename();
-                        $tmp = explode('.', $fname, 4);
+                        $tmp = array_pad(explode('.', $fname, 4), 4, '');
 
                         if($tmp[0] == $settings['chat_id'] && ( $levelid == $tmp[2] || $args[0] == 'all') )
                         {
@@ -468,9 +510,10 @@ if(isset($update["message"]))
                     if(!file_exists($archivename))
                     {
                         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => "Создать архив не удалось"));
+                        break;
                     }
 
-                    apiRequestPOST("sendDocument", array('chat_id' => $chat_id, "document" => '@'.$archivename));
+                    apiRequestPOST("sendDocument", array('chat_id' => $chat_id, "document" => new CURLFile($archivename)));
                     unlink($archivename);
                 break;
                 case '/sectors':
@@ -515,7 +558,10 @@ if(isset($update["message"]))
                             apiRequestJSON("editMessageText", array('chat_id' => $chat_id, 'message_id' => get_setting('last_ohl_message_id', $chat_id), "text" => "..."));
                         }
                         $result = apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'Markdown', "text" => $result));
-                        set_setting('last_ohl_message_id', $result['message_id'], $chat_id);
+                        if(isset($result['message_id']))
+                        {
+                            set_setting('last_ohl_message_id', $result['message_id'], $chat_id);
+                        }
                     }
                 break;
                 case '!всеко':
@@ -539,7 +585,7 @@ if(isset($update["message"]))
                                 $result .= "*$num:\t$code[code]*\n";
                             } else
                             {
-                                $result .= "_$num_\n";
+                                $result .= "_{$num}_\n";
                             }
                         }
                         if(get_setting('optimize_chat', $chat_id)=='true')
@@ -548,7 +594,10 @@ if(isset($update["message"]))
                             apiRequestJSON("editMessageText", array('chat_id' => $chat_id, 'message_id' => get_setting('last_allhl_message_id', $chat_id), "text" => "..."));
                         }
                         $result = apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'Markdown', "text" => $result));
-                        set_setting('last_allhl_message_id', $result['message_id'], $chat_id);
+                        if(isset($result['message_id']))
+                        {
+                            set_setting('last_allhl_message_id', $result['message_id'], $chat_id);
+                        }
                     }
                 break;
                 case '!зко':
@@ -581,7 +630,10 @@ if(isset($update["message"]))
                             apiRequestJSON("editMessageText", array('chat_id' => $chat_id, 'message_id' => get_setting('last_chl_message_id', $chat_id), "text" => "..."));
                         }
                         $result = apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => 'Markdown', "text" => $result));
-                        set_setting('last_chl_message_id', $result['message_id'], $chat_id);
+                        if(isset($result['message_id']))
+                        {
+                            set_setting('last_chl_message_id', $result['message_id'], $chat_id);
+                        }
                     }
                 break;
                 case '/messages':
@@ -601,7 +653,10 @@ if(isset($update["message"]))
                 break;
                 case '/encrypt':
                     $result = encrypt($args[0], ENCRYPTION_KEY);
-                    apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Зашифрованный пароль: $result"));
+                    $text = $result === false
+                        ? "Не удалось зашифровать пароль"
+                        : "Зашифрованный пароль: $result";
+                    apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $text));
                 break;
                 case '/hints':
                     if(!$settings['status'])
@@ -629,10 +684,12 @@ if(isset($update["message"]))
                         break;
                         default:
                             $buttons = Array();
-                            $cmds = explode(',', implode(' ',$args));
+                            // Команды идут по две в ряд; у нечётного списка вторая кнопка - выключение клавиатуры
+                            $cmds = array_values(array_filter(array_map('trim', explode(',', implode(' ',$args))), 'strlen'));
                             for($i=0;$i<count($cmds);$i+=2)
                             {
-                                $buttons[] = Array($cmds[$i],$cmds[$i+1] ? $cmds[$i+1] : '/keyboard off');
+                                $second = isset($cmds[$i+1]) && $cmds[$i+1] !== '' ? $cmds[$i+1] : '/keyboard off';
+                                $buttons[] = Array($cmds[$i], $second);
                             }
                             $keyboard = Array('keyboard' => $buttons, 'selective' => true, 'resize_keyboard' => true);
                             apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, 'reply_markup' => json_encode($keyboard), "text" => "Готово"));
@@ -640,7 +697,7 @@ if(isset($update["message"]))
                     }
                 break;
                 case '/admin':
-                    if($message['from']['username'] == ADMIN_USERNAME)
+                    if($from_username == ADMIN_USERNAME)
                     {
                         switch($args[0])
                         {
@@ -671,8 +728,7 @@ if(isset($update["message"]))
                                         $ret = exec("screen -d -m php $cwd/daemon.php");
                                         apiRequestJSON("sendChatAction", array('chat_id' => $chat_id, 'action' => 'typing'));
                                         sleep(2);
-                                        $pid = file_get_contents($pidfile);
-                                        $pid = intval($pid);
+                                        $pid = readPid($pidfile);
                                         if($pid > 0)
                                         {
                                              apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Служба запущена. PID: $pid"));
@@ -682,8 +738,7 @@ if(isset($update["message"]))
                                         }
                                     break;
                                     case 'stop':
-                                        $pid = file_get_contents($pidfile);
-                                        $pid = intval($pid);
+                                        $pid = readPid($pidfile);
                                         if($pid > 0)
                                         {
                                             posix_kill($pid, 2); // SIGINT
@@ -697,8 +752,7 @@ if(isset($update["message"]))
                                     break;
                                     case 'restart':
                                         apiRequestJSON("sendChatAction", array('chat_id' => $chat_id, 'action' => 'typing'));
-                                        $pid = file_get_contents($pidfile);
-                                        $pid = intval($pid);
+                                        $pid = readPid($pidfile);
                                         if($pid > 0)
                                         {
                                             posix_kill($pid, 2); // SIGINT
@@ -712,8 +766,7 @@ if(isset($update["message"]))
                                         $cwd = posix_getcwd();
                                         exec("screen -d -m php $cwd/daemon.php");
                                         sleep(2);
-                                        $pid = file_get_contents($pidfile);
-                                        $pid = intval($pid);
+                                        $pid = readPid($pidfile);
                                         if($pid > 0)
                                         {
                                              apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Служба запущена. PID: $pid"));
@@ -723,7 +776,7 @@ if(isset($update["message"]))
                                         }
                                     break;
                                     case 'status':
-                                        $pid = file_get_contents($pidfile);
+                                        $pid = readPid($pidfile);
                                         $ret = exec("ps ax | grep $pid | grep -v grep");
                                         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "PID: $pid\n$ret"));
                                     break;
@@ -756,7 +809,7 @@ help - эта справка";
             ( preg_match('#^[en1234567890]{3,}#', $text) && get_setting('noprefix', $chat_id) == 'true' ) // Соответствует регулярке на стандартный код и включена опция безпрефиксного приема стандартных кодов
         )
         {
-            $sender = $message['from']['first_name'].' '.$message['from']['last_name'];
+            $sender = trim((isset($message['from']['first_name']) ? $message['from']['first_name'] : '').' '.(isset($message['from']['last_name']) ? $message['from']['last_name'] : ''));
 
             // Костыль: эмулируем префикс для безпрефиксного ввода кодов
             if( preg_match('#^[en1234567890]{3,}#', $text) && get_setting('noprefix', $chat_id) == 'true' )
@@ -801,7 +854,7 @@ help - эта справка";
             $result = mysqli_query($db, $sql);
             $settings = mysqli_fetch_assoc($result);
 
-            if(!$settings['city'])
+            if(empty($settings['game_domain']))
             {
                 // Если не было настроек, то удаляем строку вообще
                 $sql = "DELETE FROM games WHERE chat_id = $chat_id";
@@ -818,15 +871,15 @@ help - эта справка";
     if(isset($message['pinned_message']))
     {
         // Припинили сообщение. Кидаем его в инфоканал.
-        $message_text=$message['pinned_message']['text'];
-        $message_entities = $message['pinned_message']['entities'];
+        $message_text = isset($message['pinned_message']['text']) ? $message['pinned_message']['text'] : '';
+        $message_entities = isset($message['pinned_message']['entities']) ? $message['pinned_message']['entities'] : Array();
 		$chat_id=$message['chat']['id'];
 
         $sql = "SELECT * FROM games WHERE chat_id = $chat_id";
         $result = mysqli_query($db, $sql);
         $settings = mysqli_fetch_assoc($result);
 
-        if($settings['infochannel'] && $settings['status']>0)
+        if($message_text !== '' && !empty($settings['infochannel']) && $settings['status']>0)
         {
             apiRequest("sendMessage", array('chat_id' => $settings['infochannel'], "text" => $message_text, 'entities' => $message_entities));
         }
@@ -836,26 +889,28 @@ help - эта справка";
     {
         // Если нам прислали "Venue" - подписанную геолоку через inline-запрос
         $chat_id=$message['chat']['id'];
-        $sender_id = $message['from']['id'];
-        $message_id = $message['id'];
-        $sender_username = mysqli_escape_string($db, $message['from']['username']);
-        $sender_name = mysqli_escape_string($db, $message['from']['first_name'].' '.$message['from']['last_name']);
+        $sender_id = isset($message['from']['id']) ? $message['from']['id'] : 0;
+        $message_id = $message['message_id'];
+        $sender_username = mysqli_escape_string($db, isset($message['from']['username']) ? $message['from']['username'] : '');
+        $sender_name = mysqli_escape_string($db, trim((isset($message['from']['first_name']) ? $message['from']['first_name'] : '').' '.(isset($message['from']['last_name']) ? $message['from']['last_name'] : '')));
 
         $venue = $message['venue'];
 
-        $lat = $venue['location']['latitude'];
-        $lon = $venue['location']['longitude'];
-        $address = mysqli_escape_string($db, $venue['address']);
-        $title = mysqli_escape_string($db, $venue['title']);
+        $lat = floatval($venue['location']['latitude']);
+        $lon = floatval($venue['location']['longitude']);
+        $address = mysqli_escape_string($db, isset($venue['address']) ? $venue['address'] : '');
+        // Заголовок нужен и для SQL, и в исходном виде для разбора кода
+        $title = isset($venue['title']) ? $venue['title'] : '';
+        $title_escaped = mysqli_escape_string($db, $title);
 
         $sql = "SELECT * FROM games WHERE chat_id = $chat_id";
         $result = mysqli_query($db, $sql);
         $settings = mysqli_fetch_assoc($result);
 
-        if($settings['last_level_id'] > 0) // Если у нас есть активный уровень
+        if($settings && $settings['last_level_id'] > 0) // Если у нас есть активный уровень
         {
             $sql = "INSERT INTO locations (chat_id, time, sender_username, sender_name, lat, lon, title, level, type)
-            VALUES ($chat_id, ".time().", '$sender_username', '$sender_name', $lat, $lon, '$title', $settings[last_level_id], 1)
+            VALUES ($chat_id, ".time().", '$sender_username', '$sender_name', $lat, $lon, '$title_escaped', $settings[last_level_id], 1)
             ";
             mysqli_query($db, $sql);
 
@@ -886,11 +941,11 @@ if(isset($update["inline_query"]))
     $from = $inline['from'];
     $from_id =  $from['id'];
 
-    $lat = $inline['location']['latitude'];
-    $lon = $inline['location']['longitude'];
+    $lat = isset($inline['location']['latitude']) ? $inline['location']['latitude'] : null;
+    $lon = isset($inline['location']['longitude']) ? $inline['location']['longitude'] : null;
 
-    $query = $inline['query'];
-    if(strlen(trim($query))>1)
+    $query = isset($inline['query']) ? $inline['query'] : '';
+    if($lat !== null && $lon !== null && strlen(trim($query))>1)
     {
         // В процессе написания
         apiRequest("answerInlineQuery",
@@ -920,6 +975,9 @@ if(isset($update["callback_query"]))
     $from_id = $cbq['from']['id'];
 
     $settings = gameSettingsbyUser($from_id);
+    $settings += Array('chat_id' => 0, 'status' => 0, 'last_level_id' => 0);
+    $settings['admins'] = Array();
+
     $sql = "SELECT * FROM admins";
     $result = mysqli_query($db, $sql);
     while($row = mysqli_fetch_assoc($result))
@@ -956,12 +1014,12 @@ if(isset($update["callback_query"]))
     // Если это нажатие на кнопку settings
     if(isset($cbq['data']))
     {
-        $tmp = explode(' ', $cbq['data']);
+        $tmp = array_pad(explode(' ', $cbq['data']), 2, '');
         $command = $tmp[0];
-        $chat_id = $tmp[1];
+        $chat_id = intval($tmp[1]);
 
         // Управлять настройками может только админ
-        if(in_array($cbq['from']['username'], $settings['admins']))
+        if(isset($cbq['from']['username']) && in_array($cbq['from']['username'], $settings['admins']))
         {
             switch($command)
             {

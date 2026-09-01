@@ -21,7 +21,14 @@ class Html2Text
 {
     const ENCODING = 'UTF-8';
 
-    protected $htmlFuncFlags;
+    /**
+     * Флаги для html_entity_decode()/htmlspecialchars().
+     * Начиная с PHP 8 передача null в эти параметры вызывает deprecation,
+     * поэтому значение задаётся всегда.
+     *
+     * @type int
+     */
+    protected $htmlFuncFlags = ENT_COMPAT | ENT_HTML5;
 
     /**
      * Contains the HTML content to convert.
@@ -231,14 +238,12 @@ class Html2Text
     {
         // for backwards compatibility
         if (!is_array($options)) {
-            return call_user_func_array(array($this, 'legacyConstruct'), func_get_args());
+            call_user_func_array(array($this, 'legacyConstruct'), func_get_args());
+            return;
         }
 
-        $this->html = $html;
+        $this->html = (string)$html;
         $this->options = array_merge($this->options, $options);
-        $this->htmlFuncFlags = (PHP_VERSION_ID < 50400)
-            ? ENT_COMPAT
-            : ENT_COMPAT | ENT_HTML5;
     }
 
     /**
@@ -258,7 +263,7 @@ class Html2Text
      */
     public function setHtml($html)
     {
-        $this->html = $html;
+        $this->html = (string)$html;
         $this->converted = false;
     }
 

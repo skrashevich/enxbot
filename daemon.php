@@ -1,5 +1,6 @@
 <?php
-error_reporting(E_ALL & ~(E_STRICT|E_NOTICE));
+// E_STRICT удалён как уровень ошибок и объявлен deprecated в PHP 8.4
+error_reporting(E_ALL & ~E_NOTICE);
 
 include('config.php');
 include('db.php');
@@ -13,6 +14,9 @@ if (php_sapi_name() != 'cli') {
 $pid = getmypid();
 $pidfile = BOT_USERNAME.'.pid';
 file_put_contents($pidfile, $pid);
+
+// Последний известный уровень по чатам, чтобы отследить АП мимо бота
+$levels = Array();
 
 while(true)
 {
@@ -33,7 +37,8 @@ while(true)
             {
                 case 1:
                     $array = getHints($timer['cookies'],$timer["game_domain"],$timer["game_id"], true);
-                    $hints = '*'.$timer['hint'].':* '.$array['hints'][$timer['hint']];
+                    $hintText = isset($array['hints'][$timer['hint']]['text']) ? $array['hints'][$timer['hint']]['text'] : 'текст подсказки не получен';
+                    $hints = '*'.$timer['hint'].':* '.$hintText;
                     apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'Markdown', "text" => $hints));
                     if($timer['infochannel'])
                     {
@@ -60,7 +65,7 @@ while(true)
                     }
 
                     // Сохраняем скриншот
-                    screenshot(false, $timer['chat_id'], $timer['cookies'],$timer["game_domain"],$timer["game_id"],$timer['last_level_id']);
+                    screenshot(false, $timer['chat_id'], $timer['cookies'],$timer["game_domain"],$timer["game_id"],$timer['level_id']);
                 break;
                 case 2:
                     apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'Markdown', "text" => "*АП*"));
@@ -93,11 +98,16 @@ while(true)
                         }
                     }
 
-                    // Обновляем LevelID в базе
+                    // Обновляем LevelID в базе. При сбое движка getHints()
+                    // возвращает -1 - такое значение выкинуло бы игру из
+                    // выборки cron.php, поэтому его не записываем.
                     $array = getHints($timer['cookies'],$timer["game_domain"],$timer["game_id"]);
                     $levelId = $array['levelid'];
-                    $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $timer[chat_id]";
-                    mysqli_query($db, $sql);
+                    if($levelId > 0)
+                    {
+                        $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $timer[chat_id]";
+                        mysqli_query($db, $sql);
+                    }
 
                     // Сохраняем скриншот
                     screenshot(false, $timer['chat_id'], $timer['cookies'],$timer["game_domain"],$timer["game_id"],$levelId);
@@ -116,7 +126,8 @@ while(true)
     $result = mysqli_query($db, $sql);
     while($row = mysqli_fetch_assoc($result))
     {
-        if( ($row['last_level_id'] != $levels[$row['chat_id']]) && $levels[$row['chat_id']])
+        $knownLevel = isset($levels[$row['chat_id']]) ? $levels[$row['chat_id']] : 0;
+        if( $knownLevel && $row['last_level_id'] != $knownLevel )
         {
             apiRequestJSON("sendMessage", array('chat_id' => $row['chat_id'], "parse_mode" => 'Markdown', "text" => "*АП* (по движку)"));
             // Получаем текст нового уровня и выдаем его в чат
@@ -153,4 +164,3 @@ while(true)
     }
     sleep(1);
 }
-file_put_contents($pidfile, '');

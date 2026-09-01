@@ -1,6 +1,73 @@
 <?php
 require_once 'Html2Text.php';
 
+/**
+ * Запрос к игровому движку. Всегда возвращает строку: при ошибке сети - пустую,
+ * чтобы вызывающий код не передавал false/null в строковые функции (deprecated с PHP 8.1).
+ *
+ * @param string        $url
+ * @param string|null   $cookies заголовок Cookie
+ * @param array|null    $post    поля POST-запроса; null - обычный GET
+ * @param string[]|null &$setCookies сюда складываются значения заголовков Set-Cookie
+ * @return string
+ */
+function engineRequest($url, $cookies = null, $post = null, &$setCookies = null)
+{
+    $setCookies = Array();
+
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+    if ($cookies !== null && $cookies !== '') {
+        curl_setopt($ch, CURLOPT_COOKIE, $cookies);
+    }
+    if ($post !== null) {
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
+    }
+    // Заголовки собираем колбэком: разбор сырого ответа ломается на
+    // промежуточных ответах вроде "100 Continue" и редиректах
+    curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($handle, $line) use (&$setCookies) {
+        if (stripos($line, 'Set-Cookie:') === 0) {
+            $setCookies[] = trim(substr($line, strlen('Set-Cookie:')));
+        }
+        return strlen($line);
+    });
+
+    $response = curl_exec($ch);
+
+    if ($response === false) {
+        error_log('engineRequest failed: '.curl_error($ch));
+        $response = '';
+    }
+
+    // curl_close() не нужен: начиная с PHP 8.0 дескриптор - объект,
+    // который освобождается сборщиком мусора, а сама функция устарела в 8.5
+    return (string)$response;
+}
+
+/**
+ * Превращает список заголовков Set-Cookie в пары имя => значение.
+ *
+ * @param  string[] $setCookies
+ * @return array<string,string>
+ */
+function parseSetCookies($setCookies)
+{
+    $cookies = Array();
+
+    foreach ($setCookies as $line) {
+        $pair = explode('=', explode(';', $line, 2)[0], 2);
+        $name = trim($pair[0]);
+        if ($name === '') {
+            continue;
+        }
+        $cookies[$name] = isset($pair[1]) ? $pair[1] : '';
+    }
+
+    return $cookies;
+}
+
 function auth($domain,$login,$pass)
 {
     $post = Array(
@@ -8,79 +75,29 @@ function auth($domain,$login,$pass)
         'Password' => $pass,
     );
 
-    $ch = curl_init('http://'.$domain.'/login/signin/?return=%2f');
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
-    curl_setopt($ch, CURLOPT_HEADER, true);
+    engineRequest('http://'.$domain.'/login/signin/?return=%2f', null, $post, $setCookies);
 
-    // execute!
-    $response = curl_exec($ch);
+    $cookies = parseSetCookies($setCookies);
 
-    // close the connection, release resources used
-    curl_close($ch);
-    
-    list($h1, $header, $body) = explode("\r\n\r\n", $response, 3);
-
-    $cookies = Array();
-    $rawcookies = '';
-
-    $authflag = false;
-
-    $hlines = explode("\n",$header);
-    foreach($hlines as $line)
+    if(!isset($cookies['atoken'])) // первый этап авторизации не пройден
     {
-        $line = trim($line);
-        if(strpos($line,'Set-Cookie: ')===0)
-        {
-            list($hren, $cookie) = explode(': ',$line,2);
-            list($cookie,$hren) = explode('; ',$cookie,2);
-            $rawcookies.="$cookie; ";
-            list($cookiename,$cookieval) = explode('=', $cookie,2);
-
-            $cookies[$cookiename]=$cookieval;
-            if($cookiename == 'atoken')
-            {
-                $authflag = true;
-            }
-        }
+      return false;
     }
 
-    if($authflag) // идем на второй этап авторизации
+    // идем на второй этап авторизации
+    $rawcookies = '';
+    foreach($cookies as $k=>$v)
     {
-      $ch = curl_init('http://'.$domain.'/login/checkcookie?return=%252f');
-      curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-      curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
-      curl_setopt($ch, CURLOPT_HEADER, true);
-      curl_setopt($ch, CURLOPT_COOKIE, $rawcookies);
+        $rawcookies .= "$k=$v; ";
+    }
 
-      // execute!
-      $response = curl_exec($ch);
+    engineRequest('http://'.$domain.'/login/checkcookie?return=%252f', $rawcookies, $post, $setCookies);
 
-      // close the connection, release resources used
-      curl_close($ch);
-      
-      list($h1, $header, $body) = explode("\r\n\r\n", $response, 3);
+    $cookies = array_merge($cookies, parseSetCookies($setCookies));
 
-      $hlines = explode("\n",$header);
-      foreach($hlines as $line)
-      {
-          $line = trim($line);
-          if(strpos($line,'Set-Cookie: ')===0)
-          {
-              list($hren, $cookie) = explode(': ',$line,2);
-              list($cookie,$hren) = explode('; ',$cookie,2);
-              list($cookiename,$cookieval) = explode('=', $cookie,2);
-
-              $cookies[$cookiename]=$cookieval;
-              if($cookiename == 'stoken')
-              {
-                  $authflag = true;
-              } else
-              {
-                  $authflag = false;
-              }
-          }
-      }
+    if(!isset($cookies['stoken']))
+    {
+      return false;
     }
 
     $rawcookies = '';
@@ -89,21 +106,12 @@ function auth($domain,$login,$pass)
         $rawcookies .= "$k=$v; ";
     }
 
-    return $authflag ? $rawcookies : false;
+    return $rawcookies;
 }
 
 function testGame($cookies,$domain,$gameid)
 {
-  //
-
-  $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru');
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_COOKIE, $cookies);
-
-    $response = curl_exec($ch);
-
-    // close the connection, release resources used
-    curl_close($ch);
+    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru', $cookies);
 
     // Если короткий ответ, значит это заглушка-перенаправление
     if(strlen($response)<170)
@@ -112,53 +120,47 @@ function testGame($cookies,$domain,$gameid)
     }
     // Вычленяем название игры
 
-    preg_match('#<a href="/games/details/'.$gameid.'/">(.*)</a>#',$response,$matches);
+    if(!preg_match('#<a href="/games/details/'.$gameid.'/">(.*)</a>#',$response,$matches))
+    {
+        return false;
+    }
 
-    $levelName = $matches[1];
-
-    return $levelName;
+    return $matches[1];
 }
 
 function getLevelText($cookies,$domain,$gameid)
 {
-  $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru');
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_COOKIE, $cookies);
-
-    $response = curl_exec($ch);
-
-    // close the connection, release resources used
-    curl_close($ch);
+    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru', $cookies);
 
     // Вычленяем текст задания
 
-    preg_match('#<h3>Задание</h3>.*?<p>(.*?)(<h3|<div)#ms',$response,$matches);
+    if(!preg_match('#<h3>Задание</h3>.*?<p>(.*?)(<h3|<div)#ms',$response,$matches))
+    {
+        return false;
+    }
 
     $levelText = $matches[1];
 
-    preg_match('#<h2>Уровень <span>(\d+)</span> из (\d+).*?</h2>#', $response, $matches);
-    $levelNum = $matches[1];
-    $levelTotal = $matches[2];
+    $levelNum = '?';
+    $levelTotal = '?';
+    if(preg_match('#<h2>Уровень <span>(\d+)</span> из (\d+).*?</h2>#', $response, $matches))
+    {
+        $levelNum = $matches[1];
+        $levelTotal = $matches[2];
+    }
 
     $text_clean = html2text($levelText);
-    
-    $result = "<b>Уровень $levelNum из $levelTotal</b>\n$text_clean";
 
-    return $result;
+    return "<b>Уровень $levelNum из $levelTotal</b>\n$text_clean";
 }
 
 function getHints($cookies,$domain,$gameid,$onlyOpen=false)
 {
-  $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru');
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_COOKIE, $cookies);
+    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru', $cookies);
 
-    $response = curl_exec($ch);
-
-    // close the connection, release resources used
-    curl_close($ch);
-
+    // Каждый элемент $hints - массив с ключом 'text' (и 'remain' у закрытых подсказок).
     $hints = Array();
+    $remains = Array();
 
     // Вычленяем подсказки
 
@@ -171,9 +173,11 @@ function getHints($cookies,$domain,$gameid,$onlyOpen=false)
         $remain = $match[2];
         $remain_sec = $match[3];
 
-        $hints[$hint]['text'] = "До открытия $remain";
+        $hints[$hint] = Array(
+          'text' => "До открытия $remain",
+          'remain' => $remain_sec,
+        );
         $remains[$hint] = $remain_sec;
-        $hints[$hint]['remain'] = $remain_sec;
       }
     }
 
@@ -181,11 +185,8 @@ function getHints($cookies,$domain,$gameid,$onlyOpen=false)
     foreach($matches as $match)
     {
       $hint = $match[1];
-      $text = trim($match[2]);
 
-      $text = html2text($text);
-
-      $hints[$hint] = $text;
+      $hints[$hint] = Array('text' => html2text(trim($match[2])));
     }
 
     $result = '';
@@ -204,75 +205,64 @@ function getHints($cookies,$domain,$gameid,$onlyOpen=false)
     // Вычленяем время автоперехода
     //
 
-    preg_match('#<strong>Автопереход</strong> на следующий уровень через&nbsp;<span class="bold_off timer" id="time[0-9]*">(.*?)</span><script type="text/javascript">.*?"StartCounter":([0-9]+),.*?</script>?#ms',$response,$matches);
-    if($matches)
+    $UPsecs = 0;
+    if(preg_match('#<strong>Автопереход</strong> на следующий уровень через&nbsp;<span class="bold_off timer" id="time[0-9]*">(.*?)</span><script type="text/javascript">.*?"StartCounter":([0-9]+),.*?</script>?#ms',$response,$matches))
     {
-      $UPtime = $matches[1];
       $UPsecs = $matches[2];
-    } else {
-      $UPsecs = 0;
     }
 
     // Вычленяем LevelId
-    preg_match('#<input type="hidden" name="LevelId" value="(\d+)" />#',$response,$matches);
-    $levelId = $matches[1];
-    if(!$levelId)
-      $levelId=-1;
+    $levelId = -1;
+    if(preg_match('#<input type="hidden" name="LevelId" value="(\d+)" />#',$response,$matches) && $matches[1] > 0)
+    {
+      $levelId = $matches[1];
+    }
 
-    $array['result'] = $result;
-    $array['remains'] = $remains;
-    $array['UPsecs'] = $UPsecs;
-    $array['levelid'] = $levelId;
-    $array['hints'] = $hints;
-
-    return $array;
+    return Array(
+      'result'  => $result,
+      'remains' => $remains,
+      'UPsecs'  => $UPsecs,
+      'levelid' => $levelId,
+      'hints'   => $hints,
+    );
 }
 
-function getScheme($cookies,$city,$gamepin)
+function getScheme($cookies,$domain,$gameid)
 {
-    $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru');
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_COOKIE, $cookies);
+    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru', $cookies);
 
-    $response = curl_exec($ch);
+    // Вычленяем картинку схемы
 
-    // close the connection, release resources used
-    curl_close($ch);
-    
-    // Вычленяем текст задания
+    if(!preg_match('#<img src="(.*?)"#ms',$response,$matches))
+    {
+        return false;
+    }
 
-    preg_match('#<img src="(.*?)"#ms',$response,$matches);
-
-    $imgLink = $matches[1];
-
-    return $imgLink;
+    return $matches[1];
 }
 
 function sendCode($cookies,$domain,$gameid,$code)
 {
-    $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_COOKIE, $cookies);
-
-    $response = curl_exec($ch);
-
-    // close the connection, release resources used
-    curl_close($ch);
+    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid, $cookies);
 
     // Вычленяем LevelId
-    preg_match('#<input type="hidden" name="LevelId" value="(\d+)" />#',$response,$matches);
-
-    $levelId = $matches[1];
+    $levelId = 0;
+    if(preg_match('#<input type="hidden" name="LevelId" value="(\d+)" />#',$response,$matches))
+    {
+        $levelId = $matches[1];
+    }
 
     // Вычленяем LevelNumber
-    preg_match('#<input type="hidden" name="LevelNumber" value="(\d+)" />#',$response,$matches);
-
-    $levelNumber = $matches[1];
+    $levelNumber = 0;
+    if(preg_match('#<input type="hidden" name="LevelNumber" value="(\d+)" />#',$response,$matches))
+    {
+        $levelNumber = $matches[1];
+    }
 
     // Работаем с открытымибонусами
     preg_match_all('#<h3 class="color_correct">(.*?)Бонус (\d+):(.*?)<span class="color_sec">\((.*?)\)</span>.*?<p>(.*?)</p>#mis', $response, $matches, PREG_SET_ORDER);
     $Bonuses = Array();
-    foreach($matches as $k=>$v)
+    foreach($matches as $v)
     {
       $Bonuses[$v[2]] = Array(
         'open' => true,
@@ -284,7 +274,7 @@ function sendCode($cookies,$domain,$gameid,$code)
 
     // Работаем с закрытыми мибонусами
     preg_match_all('#<h3 class="color_bonus">(.*?)Бонус (\d+):(.*?)</h3>#mis', $response, $matches, PREG_SET_ORDER);
-    foreach($matches as $k=>$v)
+    foreach($matches as $v)
     {
       $Bonuses[$v[2]] = Array(
         'open' => false,
@@ -294,7 +284,7 @@ function sendCode($cookies,$domain,$gameid,$code)
       );
     }
 
-    unset($ch,$response);
+    unset($response);
 
     // Отправляем код
 
@@ -304,277 +294,231 @@ function sendCode($cookies,$domain,$gameid,$code)
         'LevelAction.Answer' => $code,
     );
 
-    $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru');
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_COOKIE, $cookies);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
+    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru', $cookies, $post);
 
-    // execute
-    $response = curl_exec($ch);
-
-    // close the connection, release resources used
-    curl_close($ch);
-
-    preg_match('#<span class="color_[i]?[n]?correct".*?>(.*)</span>#',$response,$matches);
-
-    $result = html2text(str_replace('&quot;','', $matches[1]));
+    $result = '';
+    if(preg_match('#<span class="color_[i]?[n]?correct".*?>(.*)</span>#',$response,$matches))
+    {
+      $result = html2text(str_replace('&quot;','', $matches[1]));
+    }
 
     // Если вдруг закончили игру
     if( preg_match('#<center class="gameCongratulation">(.*)</center>#ms', $response,$matches) )
     {
-      $result = html2text($matches[1]);
-      $array['result'] = $result;
-      $array['levelid'] = '-1';
-      $array['UP'] = false;
-
-      return $array; // Если закончили игру, то всё не имеет смысла
+      // Если закончили игру, то всё остальное не имеет смысла
+      return Array(
+        'result'  => html2text($matches[1]),
+        'levelid' => '-1',
+        'UP'      => false,
+      );
     }
 
     // Проверяем на АП
     // Вычленяем LevelId
-    preg_match('#<input type="hidden" name="LevelId" value="(\d+)" />#',$response,$matches);
-
-    if($levelId != $matches[1])
+    if(preg_match('#<input type="hidden" name="LevelId" value="(\d+)" />#',$response,$matches) && $levelId != $matches[1])
     {
-        $array['result'] = $result;
-        $array['levelid'] = $matches[1];
-        $array['UP'] = true;
-
-        return $array; // Если апнулись, то остальное не имеет смысла
+        // Если апнулись, то остальное не имеет смысла
+        return Array(
+          'result'  => $result,
+          'levelid' => $matches[1],
+          'UP'      => true,
+        );
     }
 
     // Считаем сектора
-    preg_match('#<h3>.*На уровне ([0-9]*) сектор.*?<span class="color_sec">\(осталось закрыть ([0-9]*)\)</span>#ms',$response, $matches);
-    
-    if($matches) // Если есть результаты - значит на уровне есть сектора
+    // Если есть совпадение - значит на уровне есть сектора
+    if(preg_match('#<h3>.*На уровне ([0-9]*) сектор.*?<span class="color_sec">\(осталось закрыть ([0-9]*)\)</span>#ms',$response, $matches))
     {
       $sectors_total = $matches[1];
       $sectors_rem = $matches[2];
 
       $sectors_done = $sectors_total-$sectors_rem;
-    
+
       $result .= " ($sectors_done/$sectors_total)";
     }
 
     // Работаем с вновь открытымибонусами
     preg_match_all('#<h3 class="color_correct">(.*?)Бонус (\d+):(.*?)<span class="color_sec">\((.*?)\)</span>.*?<p>(.*?)</p>#mis', $response, $matches, PREG_SET_ORDER);
-    foreach($matches as $k=>$v)
+    foreach($matches as $v)
     {
-      if($Bonuses[$v[2]]['open'] == false) // Если бонус был не открыт
+      if(isset($Bonuses[$v[2]]) && $Bonuses[$v[2]]['open'] == false) // Если бонус был не открыт
       {
         $result .= "\nОткрылся бонус ".trim($v[3]).": ".html2text($v[5])." ($v[4])";
       }
     }
 
-
-    $array['result'] = $result;
-    $array['levelid'] = $levelId;
-    $array['UP'] = false;
-
-    return $array;
+    return Array(
+      'result'  => $result,
+      'levelid' => $levelId,
+      'UP'      => false,
+    );
 }
 
 function parseCode($text, $chat_id, $sender, $location=Array())
 {
   global $db;
-  $sender = mysqli_escape_string($db, $sender);
+  $sender = mysqli_escape_string($db, (string)$sender);
+  $chat_id = intval($chat_id);
   $sql = "SELECT * FROM games WHERE chat_id = $chat_id";
   $sqlresult = mysqli_query($db, $sql);
   $settings = mysqli_fetch_assoc($sqlresult);
-  $ch=mb_substr($text,0,1);
-  if(!$settings['status'])
+
+  if(!$settings || !$settings['status'])
   {
-    $result = "Нет активной игры";
-  } elseif($chat_id > 0)
+    return "Нет активной игры";
+  }
+  if($chat_id > 0)
   {
-      // Если код пришел в личку, то ругаемся
-      $result = "Отправка кодов возможна только в публичные чаты";
-  } elseif( ($settings['status']==2) || ($settings['status']==4) )
+    // Если код пришел в личку, то ругаемся
+    return "Отправка кодов возможна только в публичные чаты";
+  }
+
+  // Пробиваем в движок все до символов //, остальное - комментарий
+  $parts = explode('//', substr($text,1), 2);
+  $code = $parts[0];
+  $comment = isset($parts[1]) ? $parts[1] : '';
+
+  // Если не принимать код без комментария и комментария нет
+  if(get_setting('nocomment', $chat_id)=='true' && strlen($comment)==0)
+  {
+    return "Прием кода возможен только с комментарием";
+  }
+
+  // Обрабатываем геокоды: статус 3 - с пробитием в движок, статус 4 - только в лог
+  if($settings['status']==3 || $settings['status']==4)
+  {
+    if(!isset($location['latitude']) || !isset($location['longitude']))
+    {
+      return "Прием кодов возможен только с геолокацией";
+    }
+    $comment .= " ($location[latitude], $location[longitude])";
+  }
+
+  if( ($settings['status']==2) || ($settings['status']==4) )
   {
     // Заносим код в лог но не пробиваем его
-    $code=mysqli_escape_string($db, substr($text,1));
-    list($code,$comment) = explode('//', $code, 2);
-    // Если не принимать код без комментария и комментария нет
-    if(get_setting('nocomment', $chat_id)=='true' && strlen($comment)==0)
-    {
-      $result = "Прием кода возможен только с комментарием";
-      return $result;
-    }
-    if($settings['status']==4) // Если включен режим геокодов, без пробития в двигло
-    {
-      if(isset($location['lat']) && isset($location['lon']))
-      {
-        $comment .= " ($location[lat], $location[lon])";
-      } else
-      {
-        $result = "Прием кодов возможен только с геолокацией";
-        return $result;
-      }
-    }
     $sql = "INSERT INTO codeslog (chat_id, level, code, comment, `time`, sender, `return`) VALUES
             (
                 $chat_id, ".intval($settings['last_level_id']).", '".mysqli_escape_string($db, $code)."', '".mysqli_escape_string($db, $comment)."', ".time().", '$sender', 'NOT SENDED'
             )";
     mysqli_query($db, $sql);
-    $result = "Код записан, но не передан в движок";
-  } else // если status = 1 или 3
+
+    return "Код записан, но не передан в движок";
+  }
+
+  // если status = 1 или 3
+  if(!$settings["cookies"])
   {
-      $code=substr($text,1);
-      // Пробиваем в движок все до символов //
-      list($code,$comment) = explode('//', $code, 2);
-      // Если не принимать код без комментария и комментария нет
-      if(get_setting('nocomment', $chat_id)=='true' && strlen($comment)==0)
-      {
-        $result = "Прием кода возможен только с комментарием";
-        return $result;
-      }
-      
-      // Обрабатываем геокоды
-      if($settings['status']==3) // Если включен режим геокодов
-      {
-        if(isset($location['latitude']) && isset($location['longitude']))
-        {
-          $comment .= " ($location[lat], $location[lon])";
-        } else
-        {
-          $result = "Прием кодов возможен только с геолокацией";
-          return $result;
-        }
-      }
-      if(!$settings["cookies"])
-      {
-        $cookies = auth($settings["game_domain"], $settings["game_login"], $settings["game_pass"]);
-        $sql = "UPDATE games SET cookies = '".mysqli_escape_string($db, $cookies)."' WHERE chat_id = $settings[chat_id]";
-        mysqli_query($db, $sql);
-      }
-      else
-      {
-        $cookies = $settings["cookies"];
-      }
-      if($cookies===false)
-      {
-        $result = "Не проходит авторизация на игровом движке";
-      } else
-      {
-          $sectorstmp = getSectors($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
-          $sectorsBefore = $sectorstmp['sectors'];
-          $array = sendCode($cookies,$settings["game_domain"],$settings["game_id"],$code);
-          
-          
-          $result = $array['result'];
-        
-        
-        $levelId = $array['levelid'];
-        $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $settings[chat_id]";
-        mysqli_query($db, $sql);
-        $sql = "INSERT INTO codeslog (chat_id, level, code, comment, `time`, sender, `return`) VALUES
-                (
-                  $chat_id, ".intval($levelId).", '".mysqli_escape_string($db, $code)."', '".mysqli_escape_string($db, $comment)."', ".time().", '$sender', '".mysqli_escape_string($db, $array['result'])."'
-                )";
-        mysqli_query($db, $sql);
-
-        $sectorstmp = getSectors($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
-        $sectorsAfter = $sectorstmp['sectors'];
-
-        foreach($sectorsAfter as $num => $code)
-        {
-            if($sectorsBefore[$num])
-            {
-                if($sectorsBefore[$num]['found'] < $code['found']) // Мы открыли код
-                {
-                    $sql = "UPDATE codes SET code_status = 1 WHERE code_number = $num AND chat_id = $settings[chat_id] AND level = $levelId";
-                    mysqli_query($db, $sql);
-                }
-            }
-        }
-      }
+    $cookies = auth($settings["game_domain"], $settings["game_login"], $settings["game_pass"]);
+    if($cookies !== false)
+    {
+      $sql = "UPDATE games SET cookies = '".mysqli_escape_string($db, $cookies)."' WHERE chat_id = $settings[chat_id]";
+      mysqli_query($db, $sql);
     }
-    return $result;
+  }
+  else
+  {
+    $cookies = $settings["cookies"];
+  }
+  if($cookies===false)
+  {
+    return "Не проходит авторизация на игровом движке";
+  }
+
+  $sectorstmp = getSectors($cookies,$settings["game_domain"],$settings["game_id"]);
+  $sectorsBefore = $sectorstmp['sectors'];
+
+  $array = sendCode($cookies,$settings["game_domain"],$settings["game_id"],$code);
+  $result = $array['result'];
+  $levelId = $array['levelid'];
+
+  // levelid == -1 означает завершённую игру и записывается намеренно,
+  // а 0 - что движок не отдал LevelId: такое значение теряет текущий уровень
+  if($levelId > 0 || $levelId == -1)
+  {
+    $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $settings[chat_id]";
+    mysqli_query($db, $sql);
+  }
+  $sql = "INSERT INTO codeslog (chat_id, level, code, comment, `time`, sender, `return`) VALUES
+          (
+            $chat_id, ".intval($levelId).", '".mysqli_escape_string($db, $code)."', '".mysqli_escape_string($db, $comment)."', ".time().", '$sender', '".mysqli_escape_string($db, $result)."'
+          )";
+  mysqli_query($db, $sql);
+
+  $sectorstmp = getSectors($cookies,$settings["game_domain"],$settings["game_id"]);
+  $sectorsAfter = $sectorstmp['sectors'];
+
+  foreach($sectorsAfter as $num => $sector)
+  {
+      // Мы открыли код
+      if(isset($sectorsBefore[$num]) && $sectorsBefore[$num]['found'] < $sector['found'])
+      {
+          $sql = "UPDATE codes SET code_status = 1 WHERE code_number = ".intval($num)." AND chat_id = $settings[chat_id] AND level = ".intval($levelId);
+          mysqli_query($db, $sql);
+      }
+  }
+
+  return $result;
 }
 
 function getSectors($cookies,$domain,$gameid)
 {
-    $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_COOKIE, $cookies);
+    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid, $cookies);
 
-    $response = curl_exec($ch);
+    $result = Array(
+      'text' => "На уровне нет разделения по секторам",
+      'sectors' => Array(),
+    );
 
-    // close the connection, release resources used
-    curl_close($ch);
-
-    // Считаем сектора
-    preg_match('#<h3>.*На уровне ([0-9]*) сектор#ms',$response, $matches);
-    
-    if($matches) // Если есть результаты - значит на уровне есть сектора
+    // Считаем сектора. Есть совпадение - значит на уровне есть сектора
+    if(!preg_match('#<h3>.*На уровне ([0-9]*) сектор#ms',$response, $matches))
     {
-      $sectors_total = $matches[1];
-      preg_match('#<h3>.*На уровне ([0-9]*) сектор.*?<span class="color_sec">\(осталось закрыть ([0-9]*)\)</span>#ms', $response, $matches);
-      $sectors_rem = intval($matches[2]);
-
-      if($sectors_rem == 0)
-        $sectors_rem = $sectors_total;
-
-      $sectors_done = $sectors_total-$sectors_rem;
-    
-      $result['text'] = "На уровне $sectors_total сектора. Закрыто $sectors_done. Осталось закрыть $sectors_rem";
-
-      // Закрытые сектора
-      preg_match_all('#<p>(\d+): <span class="color_correct">(.*?)</span> <span class="color_sec">\((.*?) <a href=".*?">(.*?)</a>\)</span></p>#ms', $response, $matches, PREG_SET_ORDER);
-      foreach($matches as $match)
-      {
-        $num = $match[1];
-        $code = $match[2];
-
-        $result['sectors'][$num]['found'] = true;
-        $result['sectors'][$num]['code'] = $code;
-      }
-      // Открытые сектора
-      preg_match_all('#<p>(\d+): <span class="color_dis">код не введён</span></p>#', $response, $matches, PREG_SET_ORDER);
-      foreach($matches as $match)
-      {
-        $num = $match[1];
-        $code = $match[2];
-
-        $result['sectors'][$num]['found'] = false;
-      }
-
-      ksort($result['sectors'], SORT_NUMERIC);
-    } else
-    {
-      $result['text'] = "На уровне нет разделения по секторам";
+      return $result;
     }
+
+    $sectors_total = $matches[1];
+    $sectors_rem = $sectors_total;
+    if(preg_match('#<h3>.*На уровне ([0-9]*) сектор.*?<span class="color_sec">\(осталось закрыть ([0-9]*)\)</span>#ms', $response, $matches) && intval($matches[2]) > 0)
+    {
+      $sectors_rem = intval($matches[2]);
+    }
+
+    $sectors_done = $sectors_total-$sectors_rem;
+
+    $result['text'] = "На уровне $sectors_total сектора. Закрыто $sectors_done. Осталось закрыть $sectors_rem";
+
+    // Закрытые сектора
+    preg_match_all('#<p>(\d+): <span class="color_correct">(.*?)</span> <span class="color_sec">\((.*?) <a href=".*?">(.*?)</a>\)</span></p>#ms', $response, $matches, PREG_SET_ORDER);
+    foreach($matches as $match)
+    {
+      $result['sectors'][$match[1]] = Array('found' => true, 'code' => $match[2]);
+    }
+    // Открытые сектора
+    preg_match_all('#<p>(\d+): <span class="color_dis">код не введён</span></p>#', $response, $matches, PREG_SET_ORDER);
+    foreach($matches as $match)
+    {
+      $result['sectors'][$match[1]] = Array('found' => false, 'code' => '');
+    }
+
+    ksort($result['sectors'], SORT_NUMERIC);
 
     return $result;
 }
 
 function getMessages($cookies,$domain,$gameid)
 {
-    $ch = curl_init('http://'.$domain.'/gameengines/encounter/play/'.$gameid);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_COOKIE, $cookies);
-
-    $response = curl_exec($ch);
-
-    // close the connection, release resources used
-    curl_close($ch);
+    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid, $cookies);
 
     // Получаем сообщения
-    preg_match('#<p class="globalmess">(.*?)</p>#ms',$response, $matches);
-    
-    if($matches) // Если есть результаты - значит на уровне есть сектора
+    if(!preg_match('#<p class="globalmess">(.*?)</p>#ms',$response, $matches))
     {
-      $messages = $matches[1];
+      return Array('Нет сообщений организатора');
+    }
 
-      $messages = explode('<br />', $messages);
-
-      for($i=0;$i<count($messages);$i++)
-      {
-        $messages[$i] = html2text($messages[$i]);
-      }
-    } else
+    $messages = explode('<br />', $matches[1]);
+    foreach($messages as $i => $message)
     {
-      $messages = Array('Нет сообщений организатора');
+      $messages[$i] = html2text($message);
     }
 
     return $messages;
@@ -584,7 +528,7 @@ function getCoordsFromText($text)
 {
   $result = Array();
    // Ищем в тексте координаты
-   $levelTextClean = html2text($text);
+   $levelTextClean = html2text((string)$text);
    preg_match_all('#(.*?)[\s:,;\.]?(-?[1-8]?\d(?:\.\d{1,8})?|90(?:\.0{1,8})?)[,\s]+?(-?(?:1[0-7]|[1-9])?\d(?:\.\d{1,8})?|180(?:\.0{1,8})?)#ms', $levelTextClean, $matches, PREG_SET_ORDER);
    foreach($matches as $match)
    {
@@ -610,7 +554,7 @@ function get_setting($name, $chat_id=0)
 {
   global $db;
   $chat_id = intval($chat_id);
-  $name = mysqli_escape_string($db, $name);
+  $name = mysqli_escape_string($db, (string)$name);
   $sql="SELECT * FROM settings WHERE chat_id = $chat_id AND name = '$name' LIMIT 1";
   $result = mysqli_query($db, $sql);
   if(mysqli_num_rows($result)==0)
@@ -625,15 +569,20 @@ function set_setting($name,$value,$chat_id=0)
 {
   global $db;
   $chat_id = intval($chat_id);
-  if(!get_setting($name, $chat_id))
+  $exists = get_setting($name, $chat_id) !== false;
+
+  $name = mysqli_escape_string($db, (string)$name);
+  $value = mysqli_escape_string($db, (string)$value);
+
+  if(!$exists)
   {
-    $sql = "INSERT INTO settings (chat_id,name,value) VALUES ($chat_id, '".mysqli_escape_string($db, $name)."', '".mysqli_escape_string($db, $value)."')";
-    mysqli_query($db, $sql);
+    $sql = "INSERT INTO settings (chat_id,name,value) VALUES ($chat_id, '$name', '$value')";
   } else
   {
-    $sql = "UPDATE settings SET value = '".mysqli_escape_string($db, $value)."' WHERE name = '".mysqli_escape_string($db, $name)."' AND chat_id = $chat_id";
-    mysqli_query($db, $sql);
+    $sql = "UPDATE settings SET value = '$value' WHERE name = '$name' AND chat_id = $chat_id";
   }
+  mysqli_query($db, $sql);
+
   return true;
 }
 
@@ -653,31 +602,50 @@ function getSettingsButtons($chat_id)
 function geocoder($lat, $lon)
 {
   global $db;
+  $lat = floatval($lat);
+  $lon = floatval($lon);
+
   // Проверяем наличие координат в кэше
   $sql = "SELECT * FROM geocache WHERE lat=$lat AND lon=$lon";
   $result = mysqli_query($db, $sql);
   if(mysqli_num_rows($result)>0)
   {
     $cacherow = mysqli_fetch_assoc($result);
-    $address = $cacherow['address'];
-  } else
-  {
-    // Геокодирование адреса
-    $url = "https://geocode-maps.yandex.ru/1.x/?format=json&sco=latlong&geocode=$lat,$lon";
-    $geocoder = file_get_contents($url);
-    $geodata = json_decode($geocoder, true);
-                        
-    $address = $geodata['response']['GeoObjectCollection']['featureMember'][0]['GeoObject']['metaDataProperty']['GeocoderMetaData']['text'];
-    // Добавляем адрес в кэш
-    $sql = "INSERT INTO geocache (lat,lon,added,address) VALUES ($lat, $lon, ".time().", '".mysqli_escape_string($db, $address)."')";
-    mysqli_query($db, $sql);
+    return $cacherow['address'];
   }
+
+  // Геокодирование адреса. Базовый адрес можно переопределить в config.php
+  $base = defined('GEOCODER_URL') ? GEOCODER_URL : 'https://geocode-maps.yandex.ru/1.x/';
+  $url = $base."?format=json&sco=latlong&geocode=$lat,$lon";
+  $geocoder = @file_get_contents($url);
+  if($geocoder === false)
+  {
+    error_log("geocoder: не удалось получить данные по $lat,$lon");
+    return '';
+  }
+
+  $geodata = json_decode($geocoder, true);
+  $feature = isset($geodata['response']['GeoObjectCollection']['featureMember'][0])
+    ? $geodata['response']['GeoObjectCollection']['featureMember'][0]
+    : null;
+
+  if(!isset($feature['GeoObject']['metaDataProperty']['GeocoderMetaData']['text']))
+  {
+    return '';
+  }
+
+  $address = $feature['GeoObject']['metaDataProperty']['GeocoderMetaData']['text'];
+
+  // Добавляем адрес в кэш
+  $sql = "INSERT INTO geocache (lat,lon,added,address) VALUES ($lat, $lon, ".time().", '".mysqli_escape_string($db, $address)."')";
+  mysqli_query($db, $sql);
+
   return $address;
 }
 
 function html2text($text)
 {
-  $html = new Html2Text($text);
+  $html = new Html2Text((string)$text);
   return  $html->getText();
 }
 
@@ -686,13 +654,16 @@ function gameSettingsbyUser($user_id)
 {
   global $db;
   $settings = Array();
-  
+
   $sql = "SELECT * FROM games WHERE status>0 AND last_level_id >= 0";
   $result = mysqli_query($db, $sql);
   while($row = mysqli_fetch_assoc($result))
   {
-    $bresult = apiRequestJSON("getChatMember", array('chat_id' => $row['chat_id'], "user_id" => $user_id));
-    $chatMember = $bresult;
+    $chatMember = apiRequestJSON("getChatMember", array('chat_id' => $row['chat_id'], "user_id" => $user_id));
+    if(!is_array($chatMember) || !isset($chatMember['status']))
+    {
+      continue;
+    }
     switch($chatMember['status'])
     {
       case 'creator':
@@ -721,40 +692,51 @@ function navi($lat1,$lon1,$lat2,$lon2,$engine='yandex',$expire = 600)
       );
   } else
   {
+    $length = 0;
+    $time = 0;
+
     switch($engine)
     {
       case 'yandex':
         $url = 'https://geointernal.mob.maps.yandex.net/v1/router?rll='.$lon1.','.$lat1.'~'.$lon2.','.$lat2.'&output=time&mode=jams&_='.time();
-        $xml = file_get_contents($url);
-        preg_match('#<r:length>([0-9\.]*?)</r:length>#', $xml, $matches);
-        $length = $matches[1];
-        preg_match('#<r:time>([0-9\.]*?)</r:time>#', $xml, $matches);
-        $time = $matches[1];
-        $result = Array(
-          'length' => $length,
-          'time' => $time,
-          'url' => $url
-        );
+        $xml = @file_get_contents($url);
+        if($xml === false)
+        {
+          return false;
+        }
+        if(preg_match('#<r:length>([0-9\.]*?)</r:length>#', $xml, $matches))
+        {
+          $length = $matches[1];
+        }
+        if(preg_match('#<r:time>([0-9\.]*?)</r:time>#', $xml, $matches))
+        {
+          $time = $matches[1];
+        }
       break;
       case 'google':
         $url = 'https://maps.googleapis.com/maps/api/directions/json?origin='.$lat1.','.$lon1.'&destination='.$lat2.','.$lon2;
-        $json = file_get_contents($url);
+        $json = @file_get_contents($url);
+        if($json === false)
+        {
+          return false;
+        }
         $data = json_decode($json, true);
-        if($data['status']=='OK')
+        if(isset($data['status']) && $data['status']=='OK')
         {
           $length = $data['routes'][0]['legs'][0]['distance']['value'];
           $time = $data['routes'][0]['legs'][0]['duration']['value'];
         }
-        $result = Array(
-          'length' => $length,
-          'time' => $time,
-          'url' => $url
-        );
       break;
       default:
         return false;
-      break;
     }
+
+    $result = Array(
+      'length' => $length,
+      'time' => $time,
+      'url' => $url
+    );
+
     $sql = "INSERT INTO directionscache (lat1,lon1,lat2,lon2,added,length,time)
     VALUES ($lat1, $lon1, $lat2, $lon2,".time().",$length,$time)";
     mysqli_query($db,$sql);
@@ -767,14 +749,11 @@ function screenshot($sendFlag, $chat_id, $cookies, $domain, $gameid, $lastleveli
   $url = 'http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru';
   $filename = "screens/".$chat_id.".$gameid.".intval($lastlevelid).".".microtime(true).'.png';
   // Получаем нужные куки
-  preg_match('#atoken=(.*?);#', $cookies, $matches);
-  $atoken = $matches[1];
-  preg_match('#stoken=(.*?);#', $cookies, $matches);
-  $stoken = $matches[1];
-  preg_match('#GUID=(.*?);#', $cookies, $matches);
-  $guid = $matches[1];
-  preg_match('#Domain=(.*?);#', $cookies, $matches);
-  $domaincookie = $matches[1];
+  $cookies = (string)$cookies;
+  $atoken = preg_match('#atoken=(.*?);#', $cookies, $matches) ? $matches[1] : '';
+  $stoken = preg_match('#stoken=(.*?);#', $cookies, $matches) ? $matches[1] : '';
+  $guid = preg_match('#GUID=(.*?);#', $cookies, $matches) ? $matches[1] : '';
+  $domaincookie = preg_match('#Domain=(.*?);#', $cookies, $matches) ? $matches[1] : '';
 
   if(!file_exists(PHANTOMJS))
   {
@@ -785,12 +764,13 @@ function screenshot($sendFlag, $chat_id, $cookies, $domain, $gameid, $lastleveli
     return false;
   } else
   {
-    exec(PHANTOMJS.' enscreen.js "'.$url.'" "'.$filename.'" "'.$guid.'" "'.$stoken.'" "'.$domaincookie.'" "'.$atoken.'"');
+    $args = array($url, $filename, $guid, $stoken, $domaincookie, $atoken);
+    exec(escapeshellcmd(PHANTOMJS).' enscreen.js '.implode(' ', array_map('escapeshellarg', $args)));
     if($sendFlag)
     {
       if(file_exists($filename))
       {
-        apiRequestPOST("sendPhoto", array('chat_id' => $chat_id, "photo" => '@'.$filename));
+        apiRequestPOST("sendPhoto", array('chat_id' => $chat_id, "photo" => new CURLFile($filename)));
       } else
       {
         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => "Ошибка: не удалось получить скриншот"));
@@ -803,6 +783,22 @@ function screenshot($sendFlag, $chat_id, $cookies, $domain, $gameid, $lastleveli
 
 
 
+/**
+ * Читает PID демона из файла. Возвращает 0, если файла нет или он пуст.
+ *
+ * @param  string $pidfile
+ * @return int
+ */
+function readPid($pidfile)
+{
+  if(!file_exists($pidfile))
+  {
+    return 0;
+  }
+
+  return intval(file_get_contents($pidfile));
+}
+
 //
 // Telegram Bot Functions
 //
@@ -810,16 +806,26 @@ function screenshot($sendFlag, $chat_id, $cookies, $domain, $gameid, $lastleveli
 function logMessage($message, $type=0)
 {
     global $db;
+
+    // Telegram присылает только те поля, которые есть у сообщения,
+    // поэтому берём их через значения по умолчанию
+    $message_id = intval(isset($message['message_id']) ? $message['message_id'] : 0);
+    $chat_id    = intval(isset($message['chat']['id']) ? $message['chat']['id'] : 0);
+    $sender_id  = intval(isset($message['from']['id']) ? $message['from']['id'] : 0);
+    $chat_title = mysqli_escape_string($db, isset($message['chat']['title']) ? $message['chat']['title'] : '');
+    $text       = mysqli_escape_string($db, isset($message['text']) ? $message['text'] : '');
+    $username   = mysqli_escape_string($db, isset($message['from']['username']) ? $message['from']['username'] : '');
+
     $sql = "INSERT INTO log (time, message_id, chat_id, chat_title, text, type, sender_id, sender_username)
     VALUES (
         ".time().",
-        $message[message_id],
-        ".$message['chat']['id'].",
-        '".mysqli_escape_string($db, $message['chat']['title'])."',
-        '".mysqli_escape_string($db, $message['text'])."',
-        $type,
-        ".$message['from']['id'].",
-        '".mysqli_escape_string($db, $message['from']['username'])."'
+        $message_id,
+        $chat_id,
+        '$chat_title',
+        '$text',
+        ".intval($type).",
+        $sender_id,
+        '$username'
     )
     ";
     mysqli_query($db, $sql);
@@ -846,9 +852,9 @@ function apiRequestPOST($method, $parameters) {
   curl_setopt($handle, CURLOPT_CONNECTTIMEOUT, 10);
   curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, false);
   curl_setopt($handle, CURLOPT_TIMEOUT, 60);
-  curl_setopt($handle, CURLOPT_SAFE_UPLOAD, false);
+  // Файлы передаются объектами CURLFile: поддержка префикса '@' убрана начиная с PHP 5.6/7,
+  // а отключение CURLOPT_SAFE_UPLOAD в PHP 8 бросает ValueError
   curl_setopt($handle, CURLOPT_POSTFIELDS, $parameters);
-  //curl_setopt($handle, CURLOPT_HTTPHEADER, array("Content-Type: multipart/form-data"));
 
   return exec_curl_request($handle);
 }
@@ -881,33 +887,38 @@ function exec_curl_request($handle) {
     $errno = curl_errno($handle);
     $error = curl_error($handle);
     error_log("Curl returned error $errno: $error\n");
-    curl_close($handle);
     return false;
   }
 
+  // curl_close() устарела в PHP 8.5 и не имеет эффекта начиная с PHP 8.0
   $http_code = intval(curl_getinfo($handle, CURLINFO_HTTP_CODE));
-  curl_close($handle);
 
   if ($http_code >= 500) {
     // do not wat to DDOS server if something goes wrong
     sleep(10);
     return false;
-  } else if ($http_code != 200) {
-    $response = json_decode($response, true);
-    error_log("Request has failed with error {$response['error_code']}: {$response['description']}\n");
+  }
+
+  $decoded = json_decode($response, true);
+  if (!is_array($decoded)) {
+    $decoded = array();
+  }
+
+  if ($http_code != 200) {
+    $error_code = isset($decoded['error_code']) ? $decoded['error_code'] : $http_code;
+    $description = isset($decoded['description']) ? $decoded['description'] : 'unknown error';
+    error_log("Request has failed with error $error_code: $description\n");
     if ($http_code == 401) {
       throw new Exception('Invalid access token provided');
     }
     return false;
-  } else {
-    $response = json_decode($response, true);
-    if (isset($response['description'])) {
-      error_log("Request was successfull: {$response['description']}\n");
-    }
-    $response = $response['result'];
   }
 
-  return $response;
+  if (isset($decoded['description'])) {
+    error_log("Request was successfull: {$decoded['description']}\n");
+  }
+
+  return isset($decoded['result']) ? $decoded['result'] : false;
 }
 
 function apiRequest($method, $parameters) {
@@ -923,10 +934,10 @@ function apiRequest($method, $parameters) {
     return false;
   }
 
-  foreach ($parameters as $key => &$val) {
+  foreach ($parameters as $key => $val) {
     // encoding to JSON array parameters, for example reply_markup
     if (!is_numeric($val) && !is_string($val)) {
-      $val = json_encode($val);
+      $parameters[$key] = json_encode($val);
     }
   }
   $url = API_URL.$method.'?'.http_build_query($parameters);
@@ -966,41 +977,39 @@ function apiRequestJson($method, $parameters) {
   return exec_curl_request($handle);
 }
 
-function sendMap($chat_id,$map=""){
-    $bot_url    = "https://api.telegram.org/bot***REMOVED-TOKEN***/";
-    $url        = $bot_url . "sendPhoto?chat_id=" . $chat_id ;
-
-    $post_fields = array('chat_id'   => $chat_id,
-        'photo'     => new CURLFile(realpath("https://static-maps.yandex.ru/1.x/?ll=37.620070,55.753630&size=450,450&z=13&l=map&pt=37.620070,55.753630,pmwtm1~37.64,55.76363,pmwtm99"))
-    );
-
-    $ch = curl_init(); 
-    curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-        "Content-Type:multipart/form-data"
-    ));
-    curl_setopt($ch, CURLOPT_URL, $url); 
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1); 
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $post_fields); 
-    $output = curl_exec($ch);
-}
+//
+// Шифрование. Расширение mcrypt удалено в PHP 7.2, поэтому используется openssl.
+// Формат: base64(IV[16 байт] . AES-256-CBC(данные)).
+//
+define('ENX_CIPHER', 'aes-256-cbc');
 
 /**
- * Returns an encrypted & utf8-encoded
+ * Возвращает зашифрованную и закодированную в base64 строку либо false при ошибке.
  */
 function encrypt($pure_string, $encryption_key) {
-    $iv_size = mcrypt_get_iv_size(MCRYPT_BLOWFISH, MCRYPT_MODE_ECB);
-    $iv = mcrypt_create_iv($iv_size, MCRYPT_RAND);
-    $encrypted_string = mcrypt_encrypt(MCRYPT_BLOWFISH, $encryption_key, utf8_encode($pure_string), MCRYPT_MODE_ECB, $iv);
-    return base64_encode($encrypted_string);
+    $key = hash('sha256', (string)$encryption_key, true);
+    $iv = openssl_random_pseudo_bytes(openssl_cipher_iv_length(ENX_CIPHER));
+    $encrypted_string = openssl_encrypt((string)$pure_string, ENX_CIPHER, $key, OPENSSL_RAW_DATA, $iv);
+
+    if ($encrypted_string === false) {
+        return false;
+    }
+
+    return base64_encode($iv.$encrypted_string);
 }
 
 /**
- * Returns decrypted original string
+ * Возвращает расшифрованную строку либо false, если строка повреждена или ключ не подходит.
  */
 function decrypt($encrypted_string, $encryption_key) {
-    $iv_size = mcrypt_get_iv_size(MCRYPT_BLOWFISH, MCRYPT_MODE_ECB);
-    $iv = mcrypt_create_iv($iv_size, MCRYPT_RAND);
-    $decrypted_string = mcrypt_decrypt(MCRYPT_BLOWFISH, $encryption_key, base64_decode($encrypted_string), MCRYPT_MODE_ECB, $iv);
-    return $decrypted_string;
+    $raw = base64_decode((string)$encrypted_string, true);
+    $iv_size = openssl_cipher_iv_length(ENX_CIPHER);
+
+    if ($raw === false || strlen($raw) <= $iv_size) {
+        return false;
+    }
+
+    $key = hash('sha256', (string)$encryption_key, true);
+
+    return openssl_decrypt(substr($raw, $iv_size), ENX_CIPHER, $key, OPENSSL_RAW_DATA, substr($raw, 0, $iv_size));
 }
