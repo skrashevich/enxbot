@@ -1,6 +1,6 @@
 <?php
 // E_STRICT удалён как уровень ошибок и объявлен deprecated в PHP 8.4
-error_reporting(E_ALL & ~E_NOTICE);
+error_reporting(E_ALL);
 
 include('config.php');
 include('db.php');
@@ -12,12 +12,13 @@ if (php_sapi_name() != 'cli') {
 }
 
 $pid = getmypid();
-$pidfile = BOT_USERNAME.'.pid';
+$pidfile = getenv('ENXBOT_PID_FILE') ?: BOT_USERNAME.'.pid';
 file_put_contents($pidfile, $pid);
 
 // Последний известный уровень по чатам, чтобы отследить АП мимо бота
 $levels = Array();
 
+try {
 while(true)
 {
     $sql = "SELECT timers.*,games.chat_id,games.cookies,games.game_domain,games.game_id,games.cookies,games.infochannel
@@ -45,24 +46,8 @@ while(true)
                         apiRequestJSON("sendMessage", array('chat_id' => $timer['infochannel'], "parse_mode" => 'Markdown', "text" => $hints));
                     }
 
-                    $coords = getCoordsFromText($hints);
-                    foreach($coords as $match)
-                    {
-                        $text = $match['text'];
-                        $lat = $match['lat'];
-                        $lon = $match['lon'];
-
-                        $address = $match['address'];
-
-                        apiRequestJSON("sendVenue", array('chat_id' => $timer['chat_id'], "latitude" => $lat, "longitude" => $lon, "title" => $text, "address" => $address));
-                        apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'HTML', "text" => "$lat $lon"));
-
-                        if($timer['infochannel'])
-                        {
-                            apiRequestJSON("sendVenue", array('chat_id' => $timer['infochannel'], "latitude" => $lat, "longitude" => $lon, "title" => $text, "address" => $address));
-                            apiRequestJSON("sendMessage", array('chat_id' => $timer['infochannel'], "parse_mode" => 'HTML', "text" => "$lat $lon"));
-                        }
-                    }
+                    // Координаты из подсказки - точки того же уровня, перегон не считаем
+                    publishCoords($hints, $timer['chat_id'], $timer['infochannel'], $timer['level_id']);
 
                     // Сохраняем скриншот
                     screenshot(false, $timer['chat_id'], $timer['cookies'],$timer["game_domain"],$timer["game_id"],$timer['level_id']);
@@ -79,25 +64,6 @@ while(true)
                         apiRequestJSON("sendMessage", array('chat_id' => $timer['infochannel'], "parse_mode" => 'HTML', "text" => $levelText ? $levelText : 'Ошибка получения текста уровня'));
                     }
 
-                    $coords = getCoordsFromText($levelText);
-                    foreach($coords as $match)
-                    {
-                        $text = $match['text'];
-                        $lat = $match['lat'];
-                        $lon = $match['lon'];
-
-                        $address = $match['address'];
-
-                        apiRequestJSON("sendVenue", array('chat_id' => $timer['chat_id'], "latitude" => $lat, "longitude" => $lon, "title" => $text, "address" => $address));
-                        apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'HTML', "text" => "$lat $lon"));
-
-                        if($timer['infochannel'])
-                        {
-                            apiRequestJSON("sendVenue", array('chat_id' => $timer['infochannel'], "latitude" => $lat, "longitude" => $lon, "title" => $text, "address" => $address));
-                            apiRequestJSON("sendMessage", array('chat_id' => $timer['infochannel'], "parse_mode" => 'HTML', "text" => "$lat $lon"));
-                        }
-                    }
-
                     // Обновляем LevelID в базе. При сбое движка getHints()
                     // возвращает -1 - такое значение выкинуло бы игру из
                     // выборки cron.php, поэтому его не записываем.
@@ -107,7 +73,13 @@ while(true)
                     {
                         $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $timer[chat_id]";
                         db_query($db, $sql);
+                        $levels[$timer['chat_id']] = $levelId;
                     }
+
+                    // Новый уровень - показываем перегон от точки предыдущего
+                    publishCoords($levelText, $timer['chat_id'], $timer['infochannel'], $levelId > 0 ? $levelId : $timer['level_id'], true);
+                    publishLevelCodes($timer['chat_id'], $timer['infochannel'], $timer['level_id']);
+                    publishScheme($timer['cookies'],$timer["game_domain"],$timer["game_id"], $timer['chat_id'], $timer['infochannel']);
 
                     // Сохраняем скриншот
                     screenshot(false, $timer['chat_id'], $timer['cookies'],$timer["game_domain"],$timer["game_id"],$levelId);
@@ -140,27 +112,20 @@ while(true)
                 apiRequestJSON("sendMessage", array('chat_id' => $row['infochannel'], "parse_mode" => 'HTML', "text" => $levelText ? $levelText : 'Ошибка получения текста уровня'));
             }
 
-            $coords = getCoordsFromText($levelText);
-            foreach($coords as $match)
-            {
-                $text = $match['text'];
-                $lat = $match['lat'];
-                $lon = $match['lon'];
-
-                $address = $match['address'];
-
-                apiRequestJSON("sendVenue", array('chat_id' => $row['chat_id'], "latitude" => $lat, "longitude" => $lon, "title" => $text, "address" => $address));
-                apiRequestJSON("sendMessage", array('chat_id' => $row['chat_id'], "parse_mode" => 'HTML', "text" => "$lat $lon"));
-
-                if($row['infochannel'])
-                {
-                    apiRequestJSON("sendVenue", array('chat_id' => $row['infochannel'], "latitude" => $lat, "longitude" => $lon, "title" => $text, "address" => $address));
-                    apiRequestJSON("sendMessage", array('chat_id' => $row['infochannel'], "parse_mode" => 'HTML', "text" => "$lat $lon"));
-                }
-            }
+            publishCoords($levelText, $row['chat_id'], $row['infochannel'], $row['last_level_id'], true);
+            publishLevelCodes($row['chat_id'], $row['infochannel'], $knownLevel);
+            publishScheme($row['cookies'], $row['game_domain'], $row['game_id'], $row['chat_id'], $row['infochannel']);
             screenshot(false, $row['chat_id'], $row['cookies'],$row["game_domain"],$row["game_id"],$row['last_level_id']);
         }
         $levels[$row['chat_id']]=$row['last_level_id'];
     }
     sleep(1);
+}
+
+} catch (TelegramUnauthorizedException $e) {
+    // Токен невалиден: крутить вечный цикл дальше бессмысленно
+    fwrite(STDERR, 'daemon: '.$e->getMessage()."\n");
+    error_log('daemon: '.$e->getMessage());
+    @unlink($pidfile);
+    exit(2);
 }

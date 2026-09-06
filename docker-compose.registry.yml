@@ -1,0 +1,30 @@
+# Запуск enxbot из готового образа в реестре (без сборки).
+#
+#   mkdir -p ./data
+#   cp .env.example .env   # заполнить BOT_TOKEN / BOT_USERNAME / ENCRYPTION_KEY
+#   docker compose -f docker-compose.registry.yml up -d
+#
+# Постоянное состояние (SQLite: игры, коды, таймеры, настройки, очки, точки,
+# координаты) — в ./data на хосте -> /data в контейнере.
+
+services:
+  enxbot:
+    image: registry.svk.app/skrashevich/enxbot:latest
+    pull_policy: always
+    restart: unless-stopped
+    stop_grace_period: 15s
+    environment:
+      # обязательные
+      BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env}
+      BOT_USERNAME: ${BOT_USERNAME:?Set BOT_USERNAME in .env}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env}
+      # необязательные (значения по умолчанию — в коде, здесь только для переопределения)
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      # ENXBOT_IDLE_TIMEOUT: 86400        # тишины в чате до автоостановки игры, сек
+      # ENXBOT_CRON_INTERVAL: 60          # период cron.php, сек
+      # ENXBOT_POLL_TIMEOUT: 30           # long-poll Telegram, 1..50 сек
+      # ENXBOT_CRON_LOCK_TIMEOUT: 300     # протухание lock cron, сек
+      # PUBLIC_URL / LOCATION_MAP_GAMENAME / GEOCODER_URL  # только для /game codes map и адресов
+    volumes:
+      - ./data:/data
+      # - ./data/screens:/app/screens    # опц.: сохранять архивы скриншотов

@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS games (
   cookies TEXT,
   last_level_id INTEGER NOT NULL DEFAULT 0,
   status INTEGER,
-  infochannel TEXT,
-  shtab_id TEXT
+  payment REAL NOT NULL DEFAULT 0,
+  infochannel TEXT
 );
 
 CREATE TABLE IF NOT EXISTS log (
@@ -66,9 +66,7 @@ CREATE TABLE IF NOT EXISTS codes (
   time INTEGER,
   code_number INTEGER,
   code_status INTEGER NOT NULL DEFAULT 0,
-  code TEXT,
-  code_type INTEGER NOT NULL DEFAULT 1,
-  find INTEGER NOT NULL DEFAULT 0
+  code TEXT
 );
 CREATE INDEX IF NOT EXISTS codes_chat_level ON codes (chat_id, level);
 
@@ -96,25 +94,6 @@ CREATE TABLE IF NOT EXISTS locations (
   level INTEGER,
   type INTEGER
 );
-
-CREATE TABLE IF NOT EXISTS messages (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  chat_id INTEGER,
-  time INTEGER,
-  whom TEXT,
-  message TEXT
-);
-CREATE INDEX IF NOT EXISTS messages_chat ON messages (chat_id);
-
-CREATE TABLE IF NOT EXISTS coords (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  chat_id INTEGER,
-  level INTEGER,
-  lat REAL,
-  lon REAL,
-  time INTEGER
-);
-CREATE INDEX IF NOT EXISTS coords_chat_level ON coords (chat_id, level);
 
 CREATE TABLE IF NOT EXISTS geocache (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

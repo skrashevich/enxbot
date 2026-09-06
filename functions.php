@@ -1,192 +1,79 @@
 <?php
 require_once 'Html2Text.php';
+require_once __DIR__.'/encounter.php';
 
-/**
- * Запрос к игровому движку. Всегда возвращает строку: при ошибке сети - пустую,
- * чтобы вызывающий код не передавал false/null в строковые функции (deprecated с PHP 8.1).
- *
- * @param string        $url
- * @param string|null   $cookies заголовок Cookie
- * @param array|null    $post    поля POST-запроса; null - обычный GET
- * @param string[]|null &$setCookies сюда складываются значения заголовков Set-Cookie
- * @return string
- */
-function engineRequest($url, $cookies = null, $post = null, &$setCookies = null)
-{
-    $setCookies = Array();
-
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-    if ($cookies !== null && $cookies !== '') {
-        curl_setopt($ch, CURLOPT_COOKIE, $cookies);
-    }
-    if ($post !== null) {
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
-    }
-    // Заголовки собираем колбэком: разбор сырого ответа ломается на
-    // промежуточных ответах вроде "100 Continue" и редиректах
-    curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($handle, $line) use (&$setCookies) {
-        if (stripos($line, 'Set-Cookie:') === 0) {
-            $setCookies[] = trim(substr($line, strlen('Set-Cookie:')));
-        }
-        return strlen($line);
-    });
-
-    $response = curl_exec($ch);
-
-    if ($response === false) {
-        error_log('engineRequest failed: '.curl_error($ch));
-        $response = '';
-    }
-
-    // curl_close() не нужен: начиная с PHP 8.0 дескриптор - объект,
-    // который освобождается сборщиком мусора, а сама функция устарела в 8.5
-    return (string)$response;
-}
-
-/**
- * Превращает список заголовков Set-Cookie в пары имя => значение.
- *
- * @param  string[] $setCookies
- * @return array<string,string>
- */
-function parseSetCookies($setCookies)
-{
-    $cookies = Array();
-
-    foreach ($setCookies as $line) {
-        $pair = explode('=', explode(';', $line, 2)[0], 2);
-        $name = trim($pair[0]);
-        if ($name === '') {
-            continue;
-        }
-        $cookies[$name] = isset($pair[1]) ? $pair[1] : '';
-    }
-
-    return $cookies;
-}
+class TelegramUnauthorizedException extends RuntimeException {}
 
 function auth($domain,$login,$pass)
 {
-    $post = Array(
-        'Login' => $login,
-        'Password' => $pass,
-    );
-
-    engineRequest('http://'.$domain.'/login/signin/?return=%2f', null, $post, $setCookies);
-
-    $cookies = parseSetCookies($setCookies);
-
-    if(!isset($cookies['atoken'])) // первый этап авторизации не пройден
-    {
-      return false;
+    try {
+        $client = encxClient($domain);
+        try {
+            $result = encxDecode($client->login((string)$login, (string)$pass));
+            if (($result['Error'] ?? -1) !== 0) {
+                return false;
+            }
+            return $client->exportCookies();
+        } finally {
+            $client->close();
+        }
+    } catch (Throwable $e) {
+        error_log('Encounter auth failed: '.$e->getMessage());
+        return false;
     }
-
-    // идем на второй этап авторизации
-    $rawcookies = '';
-    foreach($cookies as $k=>$v)
-    {
-        $rawcookies .= "$k=$v; ";
-    }
-
-    engineRequest('http://'.$domain.'/login/checkcookie?return=%252f', $rawcookies, $post, $setCookies);
-
-    $cookies = array_merge($cookies, parseSetCookies($setCookies));
-
-    if(!isset($cookies['stoken']))
-    {
-      return false;
-    }
-
-    $rawcookies = '';
-    foreach($cookies as $k=>$v)
-    {
-        $rawcookies .= "$k=$v; ";
-    }
-
-    return $rawcookies;
 }
 
 function testGame($cookies,$domain,$gameid)
 {
-    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru', $cookies);
-
-    // Если короткий ответ, значит это заглушка-перенаправление
-    if(strlen($response)<170)
-    {
+    try {
+        $model = encxGameModel($cookies, $domain, $gameid);
+    } catch (Throwable $e) {
         return "У команды бота нет доступа к игре";
     }
-    // Вычленяем название игры
-
-    if(!preg_match('#<a href="/games/details/'.$gameid.'/">(.*)</a>#',$response,$matches))
-    {
-        return false;
-    }
-
-    return $matches[1];
+    return isset($model['GameTitle']) && $model['GameTitle'] !== '' ? $model['GameTitle'] : false;
 }
 
 function getLevelText($cookies,$domain,$gameid)
 {
-    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru', $cookies);
-
-    // Вычленяем текст задания
-
-    if(!preg_match('#<h3>Задание</h3>.*?<p>(.*?)(<h3|<div)#ms',$response,$matches))
-    {
+    try {
+        $model = encxGameModel($cookies, $domain, $gameid);
+    } catch (Throwable $e) {
         return false;
     }
-
-    $levelText = $matches[1];
-
-    $levelNum = '?';
-    $levelTotal = '?';
-    if(preg_match('#<h2>Уровень <span>(\d+)</span> из (\d+).*?</h2>#', $response, $matches))
-    {
-        $levelNum = $matches[1];
-        $levelTotal = $matches[2];
+    $level = encxLevel($model);
+    $levelText = encxTaskHTML($level);
+    if ($level === null || $levelText === '') {
+        return false;
     }
-
-    $text_clean = html2text($levelText);
-
-    return "<b>Уровень $levelNum из $levelTotal</b>\n$text_clean";
+    $levelNum = $level['Number'] ?? '?';
+    $levelTotal = isset($model['Levels']) && is_array($model['Levels']) ? count($model['Levels']) : '?';
+    return "<b>Уровень $levelNum из $levelTotal</b>\n".html2text($levelText);
 }
 
 function getHints($cookies,$domain,$gameid,$onlyOpen=false)
 {
-    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru', $cookies);
-
-    // Каждый элемент $hints - массив с ключом 'text' (и 'remain' у закрытых подсказок).
     $hints = Array();
     $remains = Array();
-
-    // Вычленяем подсказки
-
-    if(!$onlyOpen)
-    {
-      preg_match_all('#<span class="color_dis"><b>Подсказка&nbsp;([0-9]+)</b>&nbsp;будет через&nbsp;<span class="bold_off color_dis" id="time[0-9]*?">(.*?)</span><script type="text/javascript">.*?"StartCounter":([0-9]+),.*?</script>#ms',$response,$matches,PREG_SET_ORDER);
-      foreach($matches as $match)
-      {
-        $hint = $match[1];
-        $remain = $match[2];
-        $remain_sec = $match[3];
-
-        $hints[$hint] = Array(
-          'text' => "До открытия $remain",
-          'remain' => $remain_sec,
-        );
-        $remains[$hint] = $remain_sec;
-      }
+    $level = null;
+    try {
+        $level = encxLevel(encxGameModel($cookies, $domain, $gameid));
+    } catch (Throwable $e) {
+        error_log('Encounter getHints failed: '.$e->getMessage());
     }
 
-    preg_match_all('#<h3>Подсказка ([0-9]+)</h3>(.*?)</p>#sm',$response,$matches,PREG_SET_ORDER);
-    foreach($matches as $match)
-    {
-      $hint = $match[1];
-
-      $hints[$hint] = Array('text' => html2text(trim($match[2])));
+    foreach (($level['Helps'] ?? array()) as $hint) {
+        $number = (int)($hint['Number'] ?? 0);
+        if ($number <= 0 || !empty($hint['IsPenalty'])) {
+            continue;
+        }
+        $text = $hint['HelpText'] ?? null;
+        $remain = (int)($hint['RemainSeconds'] ?? 0);
+        if (is_string($text) && $text !== '') {
+            $hints[$number] = Array('text' => html2text($text));
+        } elseif (!$onlyOpen && $remain > 0) {
+            $hints[$number] = Array('text' => "До открытия {$remain} сек.", 'remain' => $remain);
+            $remains[$number] = $remain;
+        }
     }
 
     $result = '';
@@ -201,22 +88,8 @@ function getHints($cookies,$domain,$gameid,$onlyOpen=false)
       $result = 'Подсказок нет';
     }
 
-    //
-    // Вычленяем время автоперехода
-    //
-
-    $UPsecs = 0;
-    if(preg_match('#<strong>Автопереход</strong> на следующий уровень через&nbsp;<span class="bold_off timer" id="time[0-9]*">(.*?)</span><script type="text/javascript">.*?"StartCounter":([0-9]+),.*?</script>?#ms',$response,$matches))
-    {
-      $UPsecs = $matches[2];
-    }
-
-    // Вычленяем LevelId
-    $levelId = -1;
-    if(preg_match('#<input type="hidden" name="LevelId" value="(\d+)" />#',$response,$matches) && $matches[1] > 0)
-    {
-      $levelId = $matches[1];
-    }
+    $UPsecs = $level === null ? 0 : (int)($level['TimeoutSecondsRemain'] ?? 0);
+    $levelId = $level === null ? -1 : (int)($level['LevelId'] ?? -1);
 
     return Array(
       'result'  => $result,
@@ -227,131 +100,131 @@ function getHints($cookies,$domain,$gameid,$onlyOpen=false)
     );
 }
 
-function getScheme($cookies,$domain,$gameid)
+/**
+ * Код Event игровой модели означает завершённую игру.
+ * Encounter сообщает конец игры разными кодами:
+ *   6  (EventGameFinished) - все уровни пройдены;
+ *   17 (EventGameEnded, "Игра окончена") - так завершённую игру отдаёт боевой
+ *      REST-движок (проверено на demo.en.cx: после последнего кода Event=17,
+ *      Level=null, все Levels[].IsPassed=true).
+ */
+function isGameFinishedEvent($event)
 {
-    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru', $cookies);
+    $event = (int)$event;
+    return $event === 6 || $event === 17;
+}
 
-    // Вычленяем картинку схемы
-
-    if(!preg_match('#<img src="(.*?)"#ms',$response,$matches))
-    {
-        return false;
+/**
+ * Игра завершена по данным движка.
+ * Возвращает null, если состояние выяснить не удалось: недоступность движка
+ * не должна приводить к ложной остановке игры.
+ */
+function isGameFinished($cookies,$domain,$gameid)
+{
+    try {
+        $model = encxGameModel($cookies, $domain, $gameid);
+    } catch (Throwable $e) {
+        error_log('Encounter isGameFinished failed: '.$e->getMessage());
+        return null;
     }
 
-    return $matches[1];
+    if (!isset($model['Event'])) {
+        return null;
+    }
+
+    return isGameFinishedEvent($model['Event']);
+}
+
+function getScheme($cookies,$domain,$gameid)
+{
+    try {
+        $task = encxTaskHTML(encxLevel(encxGameModel($cookies, $domain, $gameid)));
+    } catch (Throwable $e) {
+        return false;
+    }
+    return preg_match('#<img[^>]+src=["\'](.*?)["\']#is', $task, $matches) ? $matches[1] : false;
 }
 
 function sendCode($cookies,$domain,$gameid,$code)
 {
-    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid, $cookies);
+    $bonusAccepted = false;
+    try {
+        $client = encxClient($domain, $cookies);
+        try {
+            $before = encxDecode($client->getGameModel((int)$gameid));
+            $oldLevel = encxLevel($before);
+            if ($oldLevel === null) {
+                return Array('result' => '', 'levelid' => -1, 'UP' => false);
+            }
+            $levelId = (int)($oldLevel['LevelId'] ?? 0);
+            $levelNumber = (int)($oldLevel['Number'] ?? 0);
+            $after = encxDecode($client->sendCode((int)$gameid, $levelId, $levelNumber, (string)$code));
 
-    // Вычленяем LevelId
-    $levelId = 0;
-    if(preg_match('#<input type="hidden" name="LevelId" value="(\d+)" />#',$response,$matches))
-    {
-        $levelId = $matches[1];
+            // Encounter принимает ответы на секторы и на бонусы разными полями формы,
+            // а игрок присылает просто код. Поэтому непринятый секторный код
+            // повторно пробуем как бонусный - иначе бонусы взять невозможно.
+            $accepted = $after['EngineAction']['LevelAction']['IsCorrectAnswer'] ?? null;
+            if ($accepted !== true && !empty($oldLevel['Bonuses'])) {
+                $afterBonus = encxDecode($client->sendBonusCode((int)$gameid, $levelId, $levelNumber, (string)$code));
+                if (($afterBonus['EngineAction']['BonusAction']['IsCorrectAnswer'] ?? null) === true) {
+                    $after = $afterBonus;
+                    $bonusAccepted = true;
+                }
+            }
+        } finally {
+            $client->close();
+        }
+    } catch (Throwable $e) {
+        error_log('Encounter sendCode failed: '.$e->getMessage());
+        return Array('result' => '', 'levelid' => 0, 'UP' => false);
     }
 
-    // Вычленяем LevelNumber
-    $levelNumber = 0;
-    if(preg_match('#<input type="hidden" name="LevelNumber" value="(\d+)" />#',$response,$matches))
-    {
-        $levelNumber = $matches[1];
+    if (!empty($bonusAccepted)) {
+        $accepted = true;
+    } else {
+        $action = $after['EngineAction']['LevelAction'] ?? array();
+        $accepted = $action['IsCorrectAnswer'] ?? null;
+    }
+    $result = $accepted === true ? 'Код принят' : ($accepted === false ? 'Код не принят' : '');
+    $newLevel = encxLevel($after);
+    if ($newLevel === null) {
+        return Array('result' => $result !== '' ? $result : 'Игра завершена', 'levelid' => -1, 'UP' => false);
     }
 
-    // Работаем с открытымибонусами
-    preg_match_all('#<h3 class="color_correct">(.*?)Бонус (\d+):(.*?)<span class="color_sec">\((.*?)\)</span>.*?<p>(.*?)</p>#mis', $response, $matches, PREG_SET_ORDER);
-    $Bonuses = Array();
-    foreach($matches as $v)
-    {
-      $Bonuses[$v[2]] = Array(
-        'open' => true,
-        'name' => trim($v[3]),
-        'status' => $v[4],
-        'text' => $v[5]
-      );
+    $newLevelId = (int)($newLevel['LevelId'] ?? 0);
+    if ($newLevelId > 0 && $newLevelId !== $levelId) {
+        return Array('result' => $result, 'levelid' => $newLevelId, 'UP' => true);
     }
 
-    // Работаем с закрытыми мибонусами
-    preg_match_all('#<h3 class="color_bonus">(.*?)Бонус (\d+):(.*?)</h3>#mis', $response, $matches, PREG_SET_ORDER);
-    foreach($matches as $v)
-    {
-      $Bonuses[$v[2]] = Array(
-        'open' => false,
-        'name' => trim($v[3]),
-        'status' => '',
-        'text' => ''
-      );
+    $total = count($newLevel['Sectors'] ?? array());
+    if ($total > 0) {
+        $done = 0;
+        foreach ($newLevel['Sectors'] as $sector) {
+            $done += !empty($sector['IsAnswered']) ? 1 : 0;
+        }
+        $result .= " ($done/$total)";
     }
 
-    unset($response);
-
-    // Отправляем код
-
-    $post = Array(
-        'LevelId' => $levelId,
-        'LevelNumber' => $levelNumber,
-        'LevelAction.Answer' => $code,
-    );
-
-    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru', $cookies, $post);
-
-    $result = '';
-    if(preg_match('#<span class="color_[i]?[n]?correct".*?>(.*)</span>#',$response,$matches))
-    {
-      $result = html2text(str_replace('&quot;','', $matches[1]));
+    $oldBonuses = array();
+    foreach (($oldLevel['Bonuses'] ?? array()) as $bonus) {
+        $oldBonuses[(int)($bonus['BonusId'] ?? 0)] = $bonus;
+    }
+    foreach (($newLevel['Bonuses'] ?? array()) as $bonus) {
+        $id = (int)($bonus['BonusId'] ?? 0);
+        if (!isset($oldBonuses[$id])) {
+            continue;
+        }
+        $old = $oldBonuses[$id];
+        $becameAvailable = ((int)($old['SecondsToStart'] ?? 0) > 0 && (int)($bonus['SecondsToStart'] ?? 0) <= 0)
+            || ((string)($old['Task'] ?? '') === '' && (string)($bonus['Task'] ?? '') !== '');
+        $becameAnswered = empty($old['IsAnswered']) && !empty($bonus['IsAnswered']);
+        if ($becameAvailable || $becameAnswered) {
+            $result .= "\nОткрылся бонус ".trim((string)($bonus['Name'] ?? ''))
+                .': '.html2text((string)($bonus['Task'] ?? ''));
+        }
     }
 
-    // Если вдруг закончили игру
-    if( preg_match('#<center class="gameCongratulation">(.*)</center>#ms', $response,$matches) )
-    {
-      // Если закончили игру, то всё остальное не имеет смысла
-      return Array(
-        'result'  => html2text($matches[1]),
-        'levelid' => '-1',
-        'UP'      => false,
-      );
-    }
-
-    // Проверяем на АП
-    // Вычленяем LevelId
-    if(preg_match('#<input type="hidden" name="LevelId" value="(\d+)" />#',$response,$matches) && $levelId != $matches[1])
-    {
-        // Если апнулись, то остальное не имеет смысла
-        return Array(
-          'result'  => $result,
-          'levelid' => $matches[1],
-          'UP'      => true,
-        );
-    }
-
-    // Считаем сектора
-    // Если есть совпадение - значит на уровне есть сектора
-    if(preg_match('#<h3>.*На уровне ([0-9]*) сектор.*?<span class="color_sec">\(осталось закрыть ([0-9]*)\)</span>#ms',$response, $matches))
-    {
-      $sectors_total = $matches[1];
-      $sectors_rem = $matches[2];
-
-      $sectors_done = $sectors_total-$sectors_rem;
-
-      $result .= " ($sectors_done/$sectors_total)";
-    }
-
-    // Работаем с вновь открытымибонусами
-    preg_match_all('#<h3 class="color_correct">(.*?)Бонус (\d+):(.*?)<span class="color_sec">\((.*?)\)</span>.*?<p>(.*?)</p>#mis', $response, $matches, PREG_SET_ORDER);
-    foreach($matches as $v)
-    {
-      if(isset($Bonuses[$v[2]]) && $Bonuses[$v[2]]['open'] == false) // Если бонус был не открыт
-      {
-        $result .= "\nОткрылся бонус ".trim($v[3]).": ".html2text($v[5])." ($v[4])";
-      }
-    }
-
-    return Array(
-      'result'  => $result,
-      'levelid' => $levelId,
-      'UP'      => false,
-    );
+    return Array('result' => $result, 'levelid' => $newLevelId ?: $levelId, 'UP' => false);
 }
 
 function parseCode($text, $chat_id, $sender, $location=Array())
@@ -453,7 +326,7 @@ function parseCode($text, $chat_id, $sender, $location=Array())
       // Мы открыли код
       if(isset($sectorsBefore[$num]) && $sectorsBefore[$num]['found'] < $sector['found'])
       {
-          $sql = "UPDATE codes SET code_status = 1 WHERE code_number = ".intval($num)." AND chat_id = $settings[chat_id] AND level = ".intval($levelId);
+          $sql = "UPDATE codes SET code_status = 1, code = "."'".db_escape($db, $sector['code'])."' WHERE code_number = ".intval($num)." AND code_type = 1 AND chat_id = $settings[chat_id] AND level = ".intval($levelId);
           db_query($db, $sql);
       }
   }
@@ -463,91 +336,151 @@ function parseCode($text, $chat_id, $sender, $location=Array())
 
 function getSectors($cookies,$domain,$gameid)
 {
-    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid, $cookies);
-
     $result = Array(
       'text' => "На уровне нет разделения по секторам",
       'sectors' => Array(),
     );
-
-    // Считаем сектора. Есть совпадение - значит на уровне есть сектора
-    if(!preg_match('#<h3>.*На уровне ([0-9]*) сектор#ms',$response, $matches))
-    {
+    try {
+        $level = encxLevel(encxGameModel($cookies, $domain, $gameid));
+    } catch (Throwable $e) {
+        error_log('Encounter getSectors failed: '.$e->getMessage());
+        return $result;
+    }
+    if ($level === null) {
       return $result;
     }
-
-    $sectors_total = $matches[1];
-    $sectors_rem = $sectors_total;
-    if(preg_match('#<h3>.*На уровне ([0-9]*) сектор.*?<span class="color_sec">\(осталось закрыть ([0-9]*)\)</span>#ms', $response, $matches) && intval($matches[2]) > 0)
-    {
-      $sectors_rem = intval($matches[2]);
+    if (empty($level['Sectors'])) {
+      // Уровень без секторов (одиночный код Схватки): показываем один
+      // синтетический сектор №1, чтобы !всеко/!нко/!зко и /sectors отражали
+      // единственный проходной код уровня. Движок сам код не отдаёт, поэтому
+      // после ввода поле кода остаётся пустым - важен факт "введён/не введён".
+      if (!empty($level['Number']) && empty($level['Dismissed']) && empty($level['Bonuses'])) {
+          // Движок код уровня не отдаёт даже после ввода, поэтому code пустой:
+          // важен только признак found (введён / не введён).
+          $passed = !empty($level['IsPassed']);
+          $result['sectors'][1] = Array('found' => $passed, 'code' => '');
+          $result['text'] = $passed
+              ? "На уровне один проходной код, введён"
+              : "На уровне один проходной код, ещё не введён";
+      }
+      return $result;
     }
-
-    $sectors_done = $sectors_total-$sectors_rem;
-
+    $sectors_total = count($level['Sectors']);
+    $sectors_done = 0;
+    foreach ($level['Sectors'] as $sector) {
+        $number = (int)($sector['Order'] ?? 0);
+        if ($number <= 0) {
+            $number = count($result['sectors']) + 1;
+        }
+        $found = !empty($sector['IsAnswered']);
+        if ($found) {
+            $sectors_done++;
+        }
+        $result['sectors'][$number] = Array(
+            'found' => $found,
+            'code' => $found ? encxAnswerText($sector['Answer'] ?? null) : '',
+        );
+    }
+    $sectors_rem = $sectors_total - $sectors_done;
     $result['text'] = "На уровне $sectors_total сектора. Закрыто $sectors_done. Осталось закрыть $sectors_rem";
-
-    // Закрытые сектора
-    preg_match_all('#<p>(\d+): <span class="color_correct">(.*?)</span> <span class="color_sec">\((.*?) <a href=".*?">(.*?)</a>\)</span></p>#ms', $response, $matches, PREG_SET_ORDER);
-    foreach($matches as $match)
-    {
-      $result['sectors'][$match[1]] = Array('found' => true, 'code' => $match[2]);
-    }
-    // Открытые сектора
-    preg_match_all('#<p>(\d+): <span class="color_dis">код не введён</span></p>#', $response, $matches, PREG_SET_ORDER);
-    foreach($matches as $match)
-    {
-      $result['sectors'][$match[1]] = Array('found' => false, 'code' => '');
-    }
-
     ksort($result['sectors'], SORT_NUMERIC);
+    return $result;
+}
 
+/**
+ * Бонусы текущего уровня из игровой модели движка.
+ * Возвращает сводный текст и массив вида номер => [found, code, name].
+ */
+function getBonuses($cookies,$domain,$gameid)
+{
+    $result = Array(
+      'text' => "На уровне нет бонусов",
+      'bonuses' => Array(),
+    );
+    try {
+        $level = encxLevel(encxGameModel($cookies, $domain, $gameid));
+    } catch (Throwable $e) {
+        error_log('Encounter getBonuses failed: '.$e->getMessage());
+        return $result;
+    }
+    if ($level === null || empty($level['Bonuses'])) {
+      return $result;
+    }
+    $total = count($level['Bonuses']);
+    $done = 0;
+    foreach ($level['Bonuses'] as $bonus) {
+        $number = (int)($bonus['Number'] ?? 0);
+        if ($number <= 0) {
+            $number = count($result['bonuses']) + 1;
+        }
+        $found = !empty($bonus['IsAnswered']);
+        if ($found) {
+            $done++;
+        }
+        $result['bonuses'][$number] = Array(
+            'found' => $found,
+            'code' => $found ? encxAnswerText($bonus['Answer'] ?? null) : '',
+            'name' => trim((string)($bonus['Name'] ?? '')),
+        );
+    }
+    $result['text'] = "На уровне $total бонусов. Взято $done. Осталось ".($total - $done);
+    ksort($result['bonuses'], SORT_NUMERIC);
     return $result;
 }
 
 function getMessages($cookies,$domain,$gameid)
 {
-    $response = engineRequest('http://'.$domain.'/gameengines/encounter/play/'.$gameid, $cookies);
-
-    // Получаем сообщения
-    if(!preg_match('#<p class="globalmess">(.*?)</p>#ms',$response, $matches))
-    {
+    try {
+        $level = encxLevel(encxGameModel($cookies, $domain, $gameid));
+    } catch (Throwable $e) {
       return Array('Нет сообщений организатора');
     }
-
-    $messages = explode('<br />', $matches[1]);
-    foreach($messages as $i => $message)
-    {
-      $messages[$i] = html2text($message);
+    $messages = Array();
+    foreach (($level['Messages'] ?? array()) as $message) {
+        $text = (string)($message['WrappedText'] ?? $message['MessageText'] ?? '');
+        if ($text !== '') {
+            $messages[] = html2text($text);
+        }
     }
-
-    return $messages;
+    return $messages ?: Array('Нет сообщений организатора');
 }
 
+/**
+ * Извлекает из произвольного текста все пары координат.
+ *
+ * Координату от обычного числа в тексте уровня отличает дробная часть:
+ * "Уровень 1 из 3" парой координат быть не должен. Поэтому требуем минимум
+ * два знака после запятой, а диапазоны широты и долготы проверяем явно,
+ * а не кодируем в регулярном выражении.
+ */
 function getCoordsFromText($text)
 {
   $result = Array();
-   // Ищем в тексте координаты
-   $levelTextClean = html2text((string)$text);
-   preg_match_all('#(.*?)[\s:,;\.]?(-?[1-8]?\d(?:\.\d{1,8})?|90(?:\.0{1,8})?)[,\s]+?(-?(?:1[0-7]|[1-9])?\d(?:\.\d{1,8})?|180(?:\.0{1,8})?)#ms', $levelTextClean, $matches, PREG_SET_ORDER);
-   foreach($matches as $match)
-   {
-    $text = $match[0];
-    $lat = $match[2];
-    $lon = $match[3];
-    // Костыли для отсечения дерьма
-    if(strlen($lat)<5)
+  $levelTextClean = html2text((string)$text);
+
+  if(!preg_match_all('#(?<![\d.])(-?\d+\.\d{2,10})[,\s]+(-?\d+\.\d{2,10})(?![\d.])#u', $levelTextClean, $matches, PREG_SET_ORDER))
+  {
+    return $result;
+  }
+
+  foreach($matches as $match)
+  {
+    $lat = (float)$match[1];
+    $lon = (float)$match[2];
+
+    if($lat < -90 || $lat > 90 || $lon < -180 || $lon > 180)
+    {
       continue;
-    if(strlen($lon)<5)
-      continue;
-       
+    }
+
     $address = geocoder($lat, $lon);
-    // Сразу схемы нельзя отправлять из-за ограничений телеграмма.
-    //$address .= "\n<a href=\"yandexmaps://build_route_on_map/?lat_to=$lat&lon_to=$lon\">яндекс</a> <a href=\"comgooglemaps://?daddr=$lat,$lon&zoom=12&directionsmode=driving\">google</a>";
-    $links = "\n<a href='http://bots.svk.su/geo.php?map=yandex&lat=$lat&lon=$lon'>яндекс</a> <a href='http://bots.svk.su/geo.php?map=google&lat=$lat&lon=$lon'>google</a>";
-    $result[] = Array('lat' => $lat, 'lon' => $lon, 'text' => $text, 'address' => $address, 'links' => $links);
-   }
-   return $result;
+    $links = "\n<a href='https://yandex.ru/maps/?pt=".rawurlencode($match[2]).','.rawurlencode($match[1])."&z=17&l=map'>Яндекс</a>"
+      ." <a href='https://maps.google.com/?q=".rawurlencode($match[1].','.$match[2])."'>Google</a>";
+
+    $result[] = Array('lat' => $match[1], 'lon' => $match[2], 'text' => $match[0], 'address' => $address, 'links' => $links);
+  }
+
+  return $result;
 }
 
 function get_setting($name, $chat_id=0)
@@ -586,17 +519,211 @@ function set_setting($name,$value,$chat_id=0)
   return true;
 }
 
+/**
+ * Переключаемые настройки чата: имя настройки => подпись на кнопке.
+ * Единый источник и для клавиатуры, и для обработчика нажатий.
+ */
+function settingsToggles()
+{
+  return Array(
+    'noprefix'        => 'Прием стандартных кодов без префикса',
+    'nocomment'       => 'Не принимать код без примечания',
+    'megadzr'         => 'Принимать любое число как код',
+    'optimize_chat'   => 'Удалять устаревшие списки в чате',
+    'pinnedtochannel' => 'Пересылать закрепы в инфоканал',
+    'KOtoinfochannel' => 'Выдавать коды уровня в инфоканал при АПе',
+    'autoscheme'      => 'Присылать схему дохода при АПе',
+  );
+}
+
+/**
+ * Подпись полезной нагрузки кнопки настроек.
+ *
+ * Шифровать callback_data нельзя: AES-256-CBC с IV даёт ровно 64 байта -
+ * жёсткий предел Telegram, без запаса. Подпись решает ту же задачу
+ * (чужую и подделанную кнопку бот не принимает) и укладывается вдвое короче.
+ */
+function settingsCallbackSignature($payload)
+{
+  return substr(hash_hmac('sha256', (string)$payload, ENCRYPTION_KEY), 0, 10);
+}
+
+function settingsCallbackData($name, $chat_id)
+{
+  $payload = $name.' '.intval($chat_id);
+  return $payload.' '.settingsCallbackSignature($payload);
+}
+
+/**
+ * Разбирает и проверяет callback_data кнопки настроек.
+ * Возвращает false для любых данных, которые бот не подписывал.
+ */
+function parseSettingsCallback($data)
+{
+  $parts = explode(' ', (string)$data);
+  if(count($parts) !== 3)
+  {
+    return false;
+  }
+
+  $payload = $parts[0].' '.$parts[1];
+  if(!hash_equals(settingsCallbackSignature($payload), $parts[2]))
+  {
+    return false;
+  }
+
+  if(!array_key_exists($parts[0], settingsToggles()))
+  {
+    return false;
+  }
+
+  return Array('name' => $parts[0], 'chat_id' => intval($parts[1]));
+}
+
 function getSettingsButtons($chat_id)
 {
-  $buttons = Array(
+  $buttons = Array();
+
+  foreach(settingsToggles() as $name => $label)
+  {
+    $buttons[] = Array(
       Array(
-          Array('text' => 'Прием стандартных кодов без префикса: '.(get_setting('noprefix', $chat_id) == 'true' ? '✅' : '🚫'), 'callback_data' => '/noprefix '.$chat_id),
+        'text' => $label.': '.(get_setting($name, $chat_id) == 'true' ? '✅' : '🚫'),
+        'callback_data' => settingsCallbackData($name, $chat_id),
       ),
-      Array(
-          Array('text' => 'Не принимать код без примечания: '.(get_setting('nocomment', $chat_id) == 'true' ? '✅' : '🚫'), 'callback_data' => '/nocomment '.$chat_id),
-      )
-  );
+    );
+  }
+
   return $buttons;
+}
+
+/**
+ * Отправляет в чат ответ-список определённого типа.
+ * При включённой настройке optimize_chat предыдущее сообщение этого же типа
+ * удаляется, чтобы чат не зарастал устаревшими списками.
+ * $key - короткое имя типа списка; у каждого типа свой ключ настройки.
+ */
+function sendChatList($chat_id, $key, $text, $parse_mode = 'Markdown')
+{
+  $settingName = 'last_'.$key.'_message_id';
+
+  if(get_setting('optimize_chat', $chat_id) == 'true')
+  {
+    $previous = intval(get_setting($settingName, $chat_id));
+    if($previous > 0)
+    {
+      // Сообщение могло быть удалено вручную или устареть - ошибка не важна
+      apiRequestJSON("deleteMessage", array('chat_id' => $chat_id, 'message_id' => $previous));
+    }
+  }
+
+  $result = apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "parse_mode" => $parse_mode, "text" => $text));
+
+  if(is_array($result) && isset($result['message_id']))
+  {
+    set_setting($settingName, $result['message_id'], $chat_id);
+  }
+
+  return $result;
+}
+
+/**
+ * Формирует текст списка меток или бонусов.
+ * $mode: all - все, open - только незакрытые, closed - только закрытые.
+ * Найденная в поле, но ещё не взятая метка (find) помечается отдельно.
+ */
+function formatCodeList($items, $mode, $title)
+{
+  $lines = Array();
+
+  foreach($items as $num => $item)
+  {
+    if(!is_int($num))
+      continue; // не обрабатываем если это не метка кода
+
+    $found = !empty($item['found']);
+
+    if(($mode === 'open' && $found) || ($mode === 'closed' && !$found))
+      continue;
+
+    $label = (string)$num;
+    if(!empty($item['name']))
+      $label .= ' '.$item['name'];
+
+    if($found)
+    {
+      $lines[] = "*$label:\t".$item['code']."*";
+    } else
+    {
+      $lines[] = empty($item['find']) ? "_{$label}_" : "_{$label}_ 📍";
+    }
+  }
+
+  if(!$lines)
+  {
+    return $title."\n(пусто)";
+  }
+
+  return $title."\n".implode("\n", $lines);
+}
+
+/**
+ * Отмечает метку найденной в поле, когда код ещё не взят (команда ?N).
+ * Возвращает текст ответа для чата.
+ */
+function markSectorFound($chat_id, $level, $number)
+{
+  global $db;
+  $chat_id = intval($chat_id);
+  $level = intval($level);
+  $number = intval($number);
+
+  if($level <= 0)
+  {
+    return "Нет активного уровня";
+  }
+
+  // Строки секторов создаёт cron по данным движка; своих номеров не выдумываем
+  $sql = "SELECT id, code_status FROM codes WHERE chat_id = $chat_id AND level = $level AND code_type = 1 AND code_number = $number LIMIT 1";
+  $result = db_query($db, $sql);
+  $row = db_fetch_assoc($result);
+
+  if(!$row)
+  {
+    return "На уровне нет метки $number";
+  }
+
+  if($row['code_status'])
+  {
+    return "Метка $number уже закрыта";
+  }
+
+  db_query($db, "UPDATE codes SET find = 1 WHERE id = ".intval($row['id']));
+
+  return "Метка $number отмечена как найденная";
+}
+
+/**
+ * Дополняет список секторов признаком «метка найдена в поле, код не взят»
+ * из таблицы codes (команда ?N).
+ */
+function markFoundSectors($sectors, $chat_id, $level)
+{
+  global $db;
+  $chat_id = intval($chat_id);
+  $level = intval($level);
+
+  $result = db_query($db, "SELECT code_number FROM codes WHERE chat_id = $chat_id AND level = $level AND code_type = 1 AND find = 1");
+  while($row = db_fetch_assoc($result))
+  {
+    $num = intval($row['code_number']);
+    if(isset($sectors[$num]))
+    {
+      $sectors[$num]['find'] = true;
+    }
+  }
+
+  return $sectors;
 }
 
 function geocoder($lat, $lon)
@@ -617,7 +744,7 @@ function geocoder($lat, $lon)
   // Геокодирование адреса. Базовый адрес можно переопределить в config.php
   $base = defined('GEOCODER_URL') ? GEOCODER_URL : 'https://geocode-maps.yandex.ru/1.x/';
   $url = $base."?format=json&sco=latlong&geocode=$lat,$lon";
-  $geocoder = @file_get_contents($url);
+  $geocoder = @file_get_contents($url, false, stream_context_create(array('http' => array('timeout' => 5))));
   if($geocoder === false)
   {
     error_log("geocoder: не удалось получить данные по $lat,$lon");
@@ -645,8 +772,22 @@ function geocoder($lat, $lon)
 
 function html2text($text)
 {
-  $html = new Html2Text((string)$text);
-  return  $html->getText();
+  $text = (string)$text;
+
+  // Авторы заданий Encounter часто пишут перенос строки как </br> (невалидно,
+  // но повсеместно) - Html2Text распознаёт только <br>, из-за чего весь текст
+  // уровня склеивается в одну строку. Нормализуем все варианты в <br>.
+  $text = preg_replace('#<\s*/?\s*br\s*/?\s*>#i', '<br>', $text);
+
+  // <details><summary>...</summary>...</details> (спойлер с картой/схемой):
+  // Html2Text тега не знает и вклеивает содержимое в текст без разделителей.
+  // Разворачиваем в явные переносы.
+  $text = preg_replace('#<\s*/?\s*(details|summary)\b[^>]*>#i', '<br>', $text);
+
+  // width=0: не переносим строки по колонкам - в Telegram wordwrap по 70 байт
+  // рвёт кириллицу каждые ~35 символов; клиент переносит сам.
+  $html = new Html2Text($text, array('width' => 0));
+  return $html->getText();
 }
 
 
@@ -676,9 +817,99 @@ function gameSettingsbyUser($user_id)
   return $settings;
 }
 
+/**
+ * Список username администраторов бота из таблицы admins.
+ */
+function botAdmins()
+{
+  global $db;
+  $admins = Array();
+
+  $result = db_query($db, "SELECT admin_username FROM admins");
+  while($row = db_fetch_assoc($result))
+  {
+    if($row['admin_username'] !== null && $row['admin_username'] !== '')
+    {
+      $admins[] = $row['admin_username'];
+    }
+  }
+
+  return $admins;
+}
+
+/**
+ * Администратор самого бота: главный админ из config.php либо запись в таблице admins.
+ */
+function isBotAdmin($username, $admins = null)
+{
+  $username = (string)$username;
+  if($username === '')
+  {
+    return false;
+  }
+
+  if(defined('ADMIN_USERNAME') && $username === ADMIN_USERNAME)
+  {
+    return true;
+  }
+
+  if($admins === null)
+  {
+    $admins = botAdmins();
+  }
+
+  return in_array($username, $admins, true);
+}
+
+/**
+ * Статус пользователя в чате по данным Telegram: creator, administrator, member и т.д.
+ * Пустая строка означает, что статус выяснить не удалось.
+ */
+function chatMemberStatus($chat_id, $user_id)
+{
+  $user_id = intval($user_id);
+  if($user_id === 0)
+  {
+    return '';
+  }
+
+  $chatMember = apiRequestJSON("getChatMember", array('chat_id' => $chat_id, "user_id" => $user_id));
+
+  return is_array($chatMember) && isset($chatMember['status']) ? (string)$chatMember['status'] : '';
+}
+
+/**
+ * Право управлять игрой в чате: менять настройки, запускать и останавливать бота,
+ * удалять данные. Есть у администраторов бота и у администраторов самого чата.
+ * В личке пользователь распоряжается только собственной строкой игры.
+ */
+function canManageGame($chat_id, $user_id, $username, $admins = null)
+{
+  if(isBotAdmin($username, $admins))
+  {
+    return true;
+  }
+
+  // Личный чат: единственная затрагиваемая игра - своя собственная.
+  if(intval($chat_id) > 0)
+  {
+    return true;
+  }
+
+  return in_array(chatMemberStatus($chat_id, $user_id), array('creator', 'administrator'), true);
+}
+
 function navi($lat1,$lon1,$lat2,$lon2,$engine='yandex',$expire = 600)
 {
   global $db;
+  $lat1 = (float)$lat1;
+  $lon1 = (float)$lon1;
+  $lat2 = (float)$lat2;
+  $lon2 = (float)$lon2;
+  if (!is_finite($lat1) || !is_finite($lon1) || !is_finite($lat2) || !is_finite($lon2)
+      || abs($lat1) > 90 || abs($lat2) > 90 || abs($lon1) > 180 || abs($lon2) > 180) {
+    return false;
+  }
   // Проверяем наличие данных в кэше
   $sql = "SELECT * FROM directionscache WHERE lat1=$lat1 AND lon1=$lon1 AND lat2=$lat2 AND lon2=$lon2 AND added>".(time()-$expire);
   $sqlresult = db_query($db, $sql);
@@ -698,8 +929,10 @@ function navi($lat1,$lon1,$lat2,$lon2,$engine='yandex',$expire = 600)
     switch($engine)
     {
       case 'yandex':
-        $url = 'https://geointernal.mob.maps.yandex.net/v1/router?rll='.$lon1.','.$lat1.'~'.$lon2.','.$lat2.'&output=time&mode=jams&_='.time();
-        $xml = @file_get_contents($url);
+        // Базовый адрес маршрутизатора можно переопределить в config.php
+        $base = defined('ROUTER_URL') ? ROUTER_URL : 'https://geointernal.mob.maps.yandex.net/v1/router';
+        $url = $base.'?rll='.$lon1.','.$lat1.'~'.$lon2.','.$lat2.'&output=time&mode=jams&_='.time();
+        $xml = @file_get_contents($url, false, stream_context_create(array('http' => array('timeout' => 5))));
         if($xml === false)
         {
           return false;
@@ -715,7 +948,7 @@ function navi($lat1,$lon1,$lat2,$lon2,$engine='yandex',$expire = 600)
       break;
       case 'google':
         $url = 'https://maps.googleapis.com/maps/api/directions/json?origin='.$lat1.','.$lon1.'&destination='.$lat2.','.$lon2;
-        $json = @file_get_contents($url);
+        $json = @file_get_contents($url, false, stream_context_create(array('http' => array('timeout' => 5))));
         if($json === false)
         {
           return false;
@@ -731,6 +964,9 @@ function navi($lat1,$lon1,$lat2,$lon2,$engine='yandex',$expire = 600)
         return false;
     }
 
+    if (!is_numeric($length) || !is_numeric($time) || $length <= 0 || $time < 0) {
+      return false;
+    }
     $result = Array(
       'length' => $length,
       'time' => $time,
@@ -744,12 +980,355 @@ function navi($lat1,$lon1,$lat2,$lon2,$engine='yandex',$expire = 600)
   return $result;
 }
 
+/**
+ * Сохраняет координату уровня в историю точек.
+ */
+function saveLevelPoint($chat_id, $level, $lat, $lon)
+{
+  global $db;
+  $chat_id = intval($chat_id);
+  $level = intval($level);
+
+  if($level <= 0)
+  {
+    return;
+  }
+
+  db_query($db, "INSERT INTO coords (chat_id, level, lat, lon, time) VALUES ($chat_id, $level, ".floatval($lat).", ".floatval($lon).", ".time().")");
+}
+
+/**
+ * Последняя сохранённая точка предыдущих уровней этого чата.
+ * Нужна, чтобы посчитать перегон от прошлого КП до нового.
+ */
+function lastLevelPoint($chat_id, $beforeLevel)
+{
+  global $db;
+  $chat_id = intval($chat_id);
+  $beforeLevel = intval($beforeLevel);
+
+  $result = db_query($db, "SELECT lat, lon FROM coords WHERE chat_id = $chat_id AND level != $beforeLevel ORDER BY id DESC LIMIT 1");
+  $row = db_fetch_assoc($result);
+
+  return $row ? $row : null;
+}
+
+/**
+ * Человекочитаемый перегон между двумя точками.
+ * Возвращает пустую строку, если маршрутный сервис недоступен - публикация
+ * координат от этого страдать не должна.
+ */
+function routeSummary($fromLat, $fromLon, $toLat, $toLon)
+{
+  $route = navi($fromLat, $fromLon, $toLat, $toLon);
+
+  if(!is_array($route) || !isset($route['length']) || $route['length'] <= 0)
+  {
+    return '';
+  }
+
+  $km = round($route['length'] / 1000, 1);
+  $minutes = (int)round($route['time'] / 60);
+
+  return "От предыдущей точки: $km км".($minutes > 0 ? ", ~$minutes мин в пути" : '');
+}
+
+/**
+ * Публикует найденные в тексте координаты в чат и, если задан, в инфоканал.
+ * Для первой точки нового уровня добавляет перегон от точки предыдущего уровня.
+ * Возвращает количество опубликованных точек.
+ */
+function publishCoords($text, $chat_id, $infochannel = '', $level = 0, $withDistance = false)
+{
+  $coords = getCoordsFromText($text);
+  if(!$coords)
+  {
+    return 0;
+  }
+
+  $previous = ($withDistance && $level > 0) ? lastLevelPoint($chat_id, $level) : null;
+  $targets = array_unique(array_filter(array($chat_id, $infochannel), static fn($id) => $id !== null && (string)$id !== ''));
+
+  foreach($coords as $index => $match)
+  {
+    $caption = $match['lat'].' '.$match['lon'];
+
+    if($index === 0 && $previous !== null)
+    {
+      $summary = routeSummary($previous['lat'], $previous['lon'], $match['lat'], $match['lon']);
+      if($summary !== '')
+      {
+        $caption .= "\n".$summary;
+      }
+    }
+
+    foreach($targets as $target)
+    {
+      apiRequestJSON("sendVenue", array('chat_id' => $target, "latitude" => $match['lat'], "longitude" => $match['lon'], "title" => $match['text'], "address" => $match['address']));
+      apiRequestJSON("sendMessage", array('chat_id' => $target, "parse_mode" => 'HTML', "text" => $caption));
+    }
+
+    saveLevelPoint($chat_id, $level, $match['lat'], $match['lon']);
+  }
+
+  return count($coords);
+}
+
+/**
+ * Публикует сообщения организаторов, которых чат ещё не видел.
+ * Дедупликация по тексту через таблицу messages: повторный прогон cron
+ * не должен присылать то же самое ещё раз.
+ * Возвращает количество опубликованных сообщений.
+ */
+function publishNewOrgMessages($chat_id, $infochannel, $messages, $level = 0)
+{
+  global $db;
+  $chat_id = intval($chat_id);
+  $published = 0;
+
+  foreach($messages as $message)
+  {
+    $message = (string)$message;
+
+    if($message === '' || $message === 'Нет сообщений организатора')
+    {
+      continue;
+    }
+
+    $escaped = db_escape($db, $message);
+    if(db_num_rows(db_query($db, "SELECT id FROM messages WHERE chat_id = $chat_id AND message = '$escaped' LIMIT 1")) > 0)
+    {
+      continue;
+    }
+
+    db_query($db, "INSERT INTO messages (chat_id, time, whom, message) VALUES ($chat_id, ".time().", 'орг', '$escaped')");
+
+    foreach(array_filter(array($chat_id, $infochannel), 'strlen') as $target)
+    {
+      apiRequestJSON("sendMessage", array('chat_id' => $target, "parse_mode" => 'HTML', "text" => $message));
+    }
+
+    publishCoords($message, $chat_id, $infochannel, $level);
+    $published++;
+  }
+
+  return $published;
+}
+
+/**
+ * Выдаёт в инфоканал список кодов уровня (настройка KOtoinfochannel).
+ */
+function publishLevelCodes($chat_id, $infochannel, $level)
+{
+  global $db;
+  if (empty($infochannel) || get_setting('KOtoinfochannel', $chat_id) != 'true') {
+    return false;
+  }
+  $query = $db->prepare('SELECT code_number, code, code_type FROM codes WHERE chat_id = ? AND level = ? AND code_status = 1 ORDER BY code_type, code_number');
+  $query->execute(array($chat_id, $level));
+  $lines = array('Коды завершённого уровня:');
+  foreach ($query as $row) {
+    $lines[] = ($row['code_type'] == 2 ? 'Бонус ' : 'Метка ').$row['code_number'].': '.$row['code'];
+  }
+  if (count($lines) === 1) {
+    return false;
+  }
+  return apiRequestJSON('sendMessage', array('chat_id' => $infochannel, 'text' => implode("\n", $lines))) !== false;
+}
+
+/**
+ * Выдаёт схему дохода в чат и инфоканал (настройка autoscheme).
+ */
+function publishScheme($cookies, $domain, $gameid, $chat_id, $infochannel)
+{
+  if(get_setting('autoscheme', $chat_id) != 'true')
+  {
+    return false;
+  }
+
+  $img = getScheme($cookies, $domain, $gameid);
+  if($img === false)
+  {
+    return false;
+  }
+
+  foreach(array_unique(array_filter(array($chat_id, $infochannel), static fn($id) => $id !== null && (string)$id !== '')) as $target)
+  {
+    apiRequestJSON("sendPhoto", array('chat_id' => $target, "photo" => $img));
+  }
+
+  return true;
+}
+
+//
+// Точки на местности (таблица locations)
+//
+// type: 1 - прислана игроком из поля, 2 - поставлена штабом (свободна),
+//       3 - взята в работу, 4 - закрыта.
+//
+
+/**
+ * Подпись ссылки на веб-карту точек.
+ * Без неё любой, зная chat_id, увидел бы точки чужой команды.
+ */
+function mapToken($chat_id, $level)
+{
+  return substr(hash_hmac('sha256', intval($chat_id).'|'.intval($level), ENCRYPTION_KEY), 0, 16);
+}
+
+function mapTokenValid($chat_id, $level, $token)
+{
+  return hash_equals(mapToken($chat_id, $level), (string)$token);
+}
+
+/**
+ * Полный адрес веб-карты точек уровня.
+ */
+function mapUrl($chat_id, $level)
+{
+  $base = defined('PUBLIC_URL') ? rtrim(PUBLIC_URL, '/') : '';
+
+  return $base.'/map.php?c='.intval($chat_id).'&l='.intval($level).'&t='.mapToken($chat_id, $level);
+}
+
+function locationTypeName($type)
+{
+  switch(intval($type))
+  {
+    case 1: return 'от поля';
+    case 2: return 'свободна';
+    case 3: return 'в работе';
+    case 4: return 'закрыта';
+  }
+  return 'неизвестно';
+}
+
+/**
+ * Ставит точку на текущий уровень. Возвращает текст ответа для чата.
+ */
+function addPoint($chat_id, $level, $lat, $lon, $title, $sender_name, $sender_username, $type = 2)
+{
+  global $db;
+  $chat_id = intval($chat_id);
+  $level = intval($level);
+
+  if($level <= 0)
+  {
+    return "Нет активного уровня";
+  }
+
+  $sql = "INSERT INTO locations (chat_id, time, sender_username, sender_name, lat, lon, title, level, type)
+          VALUES ($chat_id, ".time().", '".db_escape($db, $sender_username)."', '".db_escape($db, $sender_name)."',
+                  ".floatval($lat).", ".floatval($lon).", '".db_escape($db, $title)."', $level, ".intval($type).")";
+  db_query($db, $sql);
+
+  return "Точка принята: ".floatval($lat)." ".floatval($lon);
+}
+
+/**
+ * Точки текущего уровня со статусами.
+ */
+function listPoints($chat_id, $level)
+{
+  global $db;
+  $chat_id = intval($chat_id);
+  $level = intval($level);
+
+  if($level <= 0)
+  {
+    return "Нет активного уровня";
+  }
+
+  $result = db_query($db, "SELECT * FROM locations WHERE chat_id = $chat_id AND level = $level ORDER BY id");
+  $lines = Array();
+
+  while($row = db_fetch_assoc($result))
+  {
+    $line = count($lines) + 1;
+    $who = trim((string)$row['sender_name']);
+    $title = trim((string)$row['title']);
+
+    $lines[] = "$line. ".$row['lat'].' '.$row['lon']
+      .' - '.locationTypeName($row['type'])
+      .($title !== '' ? " ($title)" : '')
+      .($who !== '' ? " от $who" : '');
+  }
+
+  if(!$lines)
+  {
+    return "На уровне пока нет точек";
+  }
+
+  return "Точки уровня:\n".implode("\n", $lines);
+}
+
+/**
+ * Закрывает точку: по указанным координатам либо ближайшую открытую.
+ */
+function closePoint($chat_id, $level, $lat = null, $lon = null)
+{
+  global $db;
+  $chat_id = intval($chat_id);
+  $level = intval($level);
+
+  if($level <= 0)
+  {
+    return "Нет активного уровня";
+  }
+
+  $open = db_query($db, "SELECT * FROM locations WHERE chat_id = $chat_id AND level = $level AND type < 4 ORDER BY id");
+  $best = null;
+  $bestDistance = null;
+
+  while($row = db_fetch_assoc($open))
+  {
+    if($lat === null || $lon === null)
+    {
+      // Без координат закрываем первую открытую точку
+      $best = $row;
+      break;
+    }
+
+    $distance = pointDistance($lat, $lon, $row['lat'], $row['lon']);
+    if($bestDistance === null || $distance < $bestDistance)
+    {
+      $bestDistance = $distance;
+      $best = $row;
+    }
+  }
+
+  if($best === null)
+  {
+    return "Открытых точек на уровне нет";
+  }
+
+  db_query($db, "UPDATE locations SET type = 4 WHERE id = ".intval($best['id']));
+
+  return "Точка ".$best['lat'].' '.$best['lon']." закрыта";
+}
+
+/**
+ * Расстояние между точками по прямой, в метрах (формула гаверсинуса).
+ * Нужна только для выбора ближайшей точки, маршрутный сервис здесь избыточен.
+ */
+function pointDistance($lat1, $lon1, $lat2, $lon2)
+{
+  $earth = 6371000;
+  $dLat = deg2rad((float)$lat2 - (float)$lat1);
+  $dLon = deg2rad((float)$lon2 - (float)$lon1);
+
+  $a = sin($dLat / 2) ** 2
+     + cos(deg2rad((float)$lat1)) * cos(deg2rad((float)$lat2)) * sin($dLon / 2) ** 2;
+
+  return $earth * 2 * atan2(sqrt($a), sqrt(1 - $a));
+}
+
 function screenshot($sendFlag, $chat_id, $cookies, $domain, $gameid, $lastlevelid)
 {
   $url = 'http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru';
   $filename = "screens/".$chat_id.".$gameid.".intval($lastlevelid).".".microtime(true).'.png';
   // Получаем нужные куки
-  $cookies = (string)$cookies;
+  $cookies = encxCookieHeader($cookies);
   $atoken = preg_match('#atoken=(.*?);#', $cookies, $matches) ? $matches[1] : '';
   $stoken = preg_match('#stoken=(.*?);#', $cookies, $matches) ? $matches[1] : '';
   $guid = preg_match('#GUID=(.*?);#', $cookies, $matches) ? $matches[1] : '';
@@ -860,26 +1439,6 @@ function apiRequestPOST($method, $parameters) {
 }
 
 
-function apiRequestWebhook($method, $parameters) {
-  if (!is_string($method)) {
-    error_log("Method name must be a string\n");
-    return false;
-  }
-
-  if (!$parameters) {
-    $parameters = array();
-  } else if (!is_array($parameters)) {
-    error_log("Parameters must be an array\n");
-    return false;
-  }
-
-  $parameters["method"] = $method;
-
-  header("Content-Type: application/json");
-  echo json_encode($parameters);
-  return true;
-}
-
 function exec_curl_request($handle) {
   $response = curl_exec($handle);
 
@@ -894,8 +1453,6 @@ function exec_curl_request($handle) {
   $http_code = intval(curl_getinfo($handle, CURLINFO_HTTP_CODE));
 
   if ($http_code >= 500) {
-    // do not wat to DDOS server if something goes wrong
-    sleep(10);
     return false;
   }
 
@@ -909,7 +1466,7 @@ function exec_curl_request($handle) {
     $description = isset($decoded['description']) ? $decoded['description'] : 'unknown error';
     error_log("Request has failed with error $error_code: $description\n");
     if ($http_code == 401) {
-      throw new Exception('Invalid access token provided');
+      throw new TelegramUnauthorizedException('Невалидный токен Telegram (HTTP 401)');
     }
     return false;
   }

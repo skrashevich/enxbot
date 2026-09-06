@@ -1,0 +1,20 @@
+services:
+  enxbot:
+    build: .
+    restart: unless-stopped
+    stop_grace_period: 15s
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env}
+      BOT_USERNAME: ${BOT_USERNAME:?Set BOT_USERNAME in .env}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ENXBOT_SQLITE_PATH: /data/enxbot.sqlite
+      ENXBOT_PID_FILE: /tmp/enxbot-daemon.pid
+      ENXBOT_CRON_INTERVAL: ${ENXBOT_CRON_INTERVAL:-60}
+      ENXBOT_IDLE_TIMEOUT: ${ENXBOT_IDLE_TIMEOUT:-86400}
+      ENXBOT_CRON_LOCK_TIMEOUT: ${ENXBOT_CRON_LOCK_TIMEOUT:-300}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+    volumes:
+      - enxbot-data:/data
+volumes:
+  enxbot-data:

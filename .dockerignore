@@ -1,0 +1,13 @@
+.git
+.github
+.omc
+.vscode
+.DS_Store
+config.php
+progress.txt
+screens
+tests
+*.pid
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

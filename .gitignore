@@ -8,3 +8,9 @@ screens/
 *.sqlite-shm
 *.sqlite-wal
 .omc/
+.stub_fail_mode
+.env
+
+# Кэш апстрима encx-cli для tests/run.sh и tests/e2e.sh
+tests/.cache/
+.claude/
