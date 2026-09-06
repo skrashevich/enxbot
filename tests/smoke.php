@@ -150,6 +150,30 @@ check('screenshot() без phantomjs возвращает false',
     screenshot(false, $chat_id, 'atoken=A; stoken=S; GUID=G; Domain=D;', $domain, $gameid, 777) === false);
 check('screenshot() без нужных кук не падает', screenshot(false, $chat_id, '', $domain, $gameid, 777) === false);
 
+echo "== Синтетический сектор уровня без разбивки по секторам ==\n";
+// Уровень с одним проходным кодом и бонусами: сектор №1 обязан появиться,
+// иначе !всеко/!нко и синхронизация cron не видят проходной код (баг про
+// "не видит коды с движка" на уровнях с бонусами).
+$synthOpen = synthSectorForLevel(array(
+    'RequiredSectorsCount' => 1, 'PassedSectorsCount' => 0, 'IsPassed' => false,
+    'Bonuses' => array(array('Number' => 1, 'IsAnswered' => false)),
+));
+check('synthSectorForLevel(): проходной код + бонусы -> есть сектор №1',
+    isset($synthOpen['sectors'][1]) && $synthOpen['sectors'][1]['found'] === false, var_export($synthOpen, true));
+$synthDone = synthSectorForLevel(array(
+    'RequiredSectorsCount' => 1, 'PassedSectorsCount' => 1, 'IsPassed' => false,
+));
+check('synthSectorForLevel(): введённый код помечает сектор закрытым',
+    $synthDone['sectors'][1]['found'] === true, var_export($synthDone, true));
+check('synthSectorForLevel(): IsPassed тоже закрывает сектор',
+    synthSectorForLevel(array('RequiredSectorsCount' => 1, 'IsPassed' => true))['sectors'][1]['found'] === true);
+check('synthSectorForLevel(): бонусный/экшн-уровень (Required=0) - без сектора',
+    synthSectorForLevel(array('RequiredSectorsCount' => 0, 'Bonuses' => array(array('Number' => 1))))['sectors'] === array());
+check('synthSectorForLevel(): снятый уровень - без сектора',
+    synthSectorForLevel(array('RequiredSectorsCount' => 1, 'Dismissed' => true))['sectors'] === array());
+check('synthSectorForLevel(): не-массив не роняет функцию',
+    synthSectorForLevel(null)['sectors'] === array());
+
 echo "== Списки меток и найденные метки ==\n";
 $items = array(
     1 => array('found' => true,  'code' => 'en1', 'name' => ''),

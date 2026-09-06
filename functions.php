@@ -334,6 +334,35 @@ function parseCode($text, $chat_id, $sender, $location=Array())
   return $result;
 }
 
+/**
+ * Уровень без разбивки на секторы. Если у него есть проходной код
+ * (RequiredSectorsCount > 0) и он не снят, отдаём один синтетический
+ * сектор №1: движок сам код уровня не возвращает даже после ввода, поэтому
+ * важен только факт "введён / не введён". У чисто бонусных и экшн-уровней
+ * RequiredSectorsCount == 0 - сектор не выдумываем. Наличие бонусов на
+ * уровне на это не влияет: у уровня с проходным кодом часто есть и бонусы.
+ *
+ * Возвращает ['sectors' => [1 => [...]], 'text' => '...'] либо
+ * ['sectors' => [], 'text' => null], если синтетический сектор не нужен.
+ */
+function synthSectorForLevel($level)
+{
+    if (!is_array($level)) {
+        return Array('sectors' => Array(), 'text' => null);
+    }
+    $requiredSectors = (int)($level['RequiredSectorsCount'] ?? 0);
+    if ($requiredSectors <= 0 || !empty($level['Dismissed'])) {
+        return Array('sectors' => Array(), 'text' => null);
+    }
+    $passed = !empty($level['IsPassed']) || (int)($level['PassedSectorsCount'] ?? 0) > 0;
+    return Array(
+        'sectors' => Array(1 => Array('found' => $passed, 'code' => '')),
+        'text' => $passed
+            ? "На уровне один проходной код, введён"
+            : "На уровне один проходной код, ещё не введён",
+    );
+}
+
 function getSectors($cookies,$domain,$gameid)
 {
     $result = Array(
@@ -350,18 +379,10 @@ function getSectors($cookies,$domain,$gameid)
       return $result;
     }
     if (empty($level['Sectors'])) {
-      // Уровень без секторов (одиночный код Схватки): показываем один
-      // синтетический сектор №1, чтобы !всеко/!нко/!зко и /sectors отражали
-      // единственный проходной код уровня. Движок сам код не отдаёт, поэтому
-      // после ввода поле кода остаётся пустым - важен факт "введён/не введён".
-      if (!empty($level['Number']) && empty($level['Dismissed']) && empty($level['Bonuses'])) {
-          // Движок код уровня не отдаёт даже после ввода, поэтому code пустой:
-          // важен только признак found (введён / не введён).
-          $passed = !empty($level['IsPassed']);
-          $result['sectors'][1] = Array('found' => $passed, 'code' => '');
-          $result['text'] = $passed
-              ? "На уровне один проходной код, введён"
-              : "На уровне один проходной код, ещё не введён";
+      $synth = synthSectorForLevel($level);
+      if ($synth['sectors']) {
+          $result['sectors'] = $synth['sectors'];
+          $result['text'] = $synth['text'];
       }
       return $result;
     }
