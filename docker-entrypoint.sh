@@ -7,7 +7,7 @@ if [ "$#" -gt 0 ]; then
     exec "$@"
 fi
 
-cron_interval="${ENXBOT_CRON_INTERVAL:-60}"
+cron_interval="${ENXBOT_CRON_INTERVAL:-5}"
 case "$cron_interval" in
     ''|*[!0-9]*) echo "ENXBOT_CRON_INTERVAL должен быть положительным числом" >&2; exit 2 ;;
 esac

@@ -65,6 +65,9 @@ function db_escape($db, $value)
 function db_added_columns()
 {
     return array(
+        'engine_cache' => array(
+            'confirmed' => 'INTEGER NOT NULL DEFAULT 0 CHECK (confirmed IN (0, 1))',
+        ),
         'messages' => array(
             'runtime_delivery' => 'TEXT',
         ),

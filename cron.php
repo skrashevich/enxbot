@@ -59,27 +59,38 @@ $gameresult = db_query($db, $sql);
 while($game = db_fetch_assoc($gameresult))
 {
     //
-    // Этап 0 - проверка что мы авторизированы и авторизация если нет
+    // Один свежий снимок на игру и проход: не делаем отдельный GET для
+    // подсказок, секторов, бонусов, сообщений и проверки завершения.
     //
-    $result = testGame($game['cookies'],$game["game_domain"],$game["game_id"]);
-    if(!$result)
+    $model = array();
+    try {
+        $model = encxGameModel($game['cookies'], $game['game_domain'], $game['game_id']);
+    } catch (Throwable $e) {
+        error_log('Encounter cron state failed: '.$e->getMessage());
+    }
+    // Only an explicit authentication error calls for a new login.
+    // Transport errors still reach the independent idle-stop check below.
+    if((int)($model['Event'] ?? 0) === 4)
     {
         $cookies = auth($game["game_domain"], $game["game_login"], $game["game_pass"]);
         $game['cookies'] = $cookies;
-        if($cookies===false)
+        if($cookies!==false)
         {
-            $result = "Не проходит авторизация на игровом движке";
-        } else {
-            $result = "Авторизация успешно пройдена";
             $sql = "UPDATE games SET cookies = '".db_escape($db, $cookies)."' WHERE chat_id = $game[chat_id] AND game_id = $game[game_id]";
             db_query($db, $sql);
+            try {
+                $model = encxGameModel($cookies, $game['game_domain'], $game['game_id']);
+            } catch (Throwable $e) {
+                $model = array();
+                error_log('Encounter cron state after login failed: '.$e->getMessage());
+            }
         }
     }
 
     //
     // Этап 1 - загрузка текущего уровня, проверка АП и подсказок, установка таймеров
     //
-    $array = getHints($game['cookies'],$game["game_domain"],$game["game_id"]);
+    $array = getHints($game['cookies'],$game["game_domain"],$game["game_id"],false,$model);
     
     if($array['levelid'] > 0)
     {
@@ -152,8 +163,9 @@ while($game = db_fetch_assoc($gameresult))
         );
     }
 
-    $sectorsActual = getSectors($game['cookies'],$game["game_domain"],$game["game_id"]);
-    $bonusesActual = getBonuses($game['cookies'],$game["game_domain"],$game["game_id"]);
+    $sectorsActual = getSectors($game['cookies'],$game["game_domain"],$game["game_id"],$model);
+    $bonusesActual = getBonuses($game['cookies'],$game["game_domain"],$game["game_id"],$model);
+    $sectorProgress = encxSectorProgress(encxLevel($model));
 
     $groups = Array(
         Array('type' => 1, 'label' => 'Сектор', 'items' => $sectorsActual['sectors']),
@@ -186,7 +198,10 @@ while($game = db_fetch_assoc($gameresult))
                 $sql = "UPDATE codes SET code_status = 1, code = '$code' WHERE id = ".intval($codesDB[$key]['id']);
                 db_query($db, $sql);
 
-                apiRequestJSON("sendMessage", array('chat_id' => $game['chat_id'], "parse_mode" => 'Markdown', "text" => "$group[label] *$num* закрыт через движок"));
+                $remaining = $type === 1 ? $sectorProgress['remaining'] : null;
+                foreach (engineClosureMessages($group['label'], $num, $item['text'] ?? '', $item['code'] ?? '', $remaining) as $message) {
+                    apiRequestJSON("sendMessage", array('chat_id' => $game['chat_id'], "parse_mode" => 'HTML', "text" => $message));
+                }
             }
         }
     }
@@ -197,7 +212,7 @@ while($game = db_fetch_assoc($gameresult))
     publishNewOrgMessages(
         $game['chat_id'],
         $game['infochannel'],
-        getMessages($game['cookies'],$game["game_domain"],$game["game_id"]),
+        getMessages($game['cookies'],$game["game_domain"],$game["game_id"],$model),
         $levelid
     );
 
@@ -209,7 +224,7 @@ while($game = db_fetch_assoc($gameresult))
     // Недоступность движка сама по себе игру не останавливает.
     //
     $stopReason = '';
-    $finished = isGameFinished($game['cookies'],$game["game_domain"],$game["game_id"]);
+    $finished = isGameFinished($game['cookies'],$game["game_domain"],$game["game_id"],$model);
 
     if($finished === true)
     {

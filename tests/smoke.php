@@ -182,17 +182,17 @@ $items = array(
 );
 $all = formatCodeList($items, 'all', 'Все метки:');
 check('formatCodeList(): режим all показывает и закрытые, и открытые',
-    strpos($all, '*1:') !== false && strpos($all, '_2_') !== false, $all);
+    strpos($all, '<b>1:') !== false && strpos($all, '<i>2</i>') !== false, $all);
 check('formatCodeList(): режим open скрывает закрытые',
-    strpos(formatCodeList($items, 'open', 'Незакрытые:'), '*1:') === false);
+    strpos(formatCodeList($items, 'open', 'Незакрытые:'), '<b>1:') === false);
 check('formatCodeList(): режим closed скрывает открытые',
-    strpos(formatCodeList($items, 'closed', 'Закрытые:'), '_2_') === false);
+    strpos(formatCodeList($items, 'closed', 'Закрытые:'), '<i>2</i>') === false);
 check('formatCodeList(): закрытая метка выводится с кодом',
-    formatCodeList($items, 'closed', 'Закрытые:') === "Закрытые:\n*1:\ten1*");
+    formatCodeList($items, 'closed', 'Закрытые:') === "Закрытые:\n<b>1:\ten1</b>");
 check('formatCodeList(): пустой результат обозначен явно',
     formatCodeList(array(), 'all', 'Все метки:') === "Все метки:\n(пусто)");
 check('formatCodeList(): нечисловые ключи пропускаются',
-    formatCodeList(array('text' => 'мусор', 1 => array('found' => false)), 'all', 'T') === "T\n_1_");
+    formatCodeList(array('text' => 'мусор', 1 => array('found' => false)), 'all', 'T') === "T\n<i>1</i>");
 
 // Найденная в поле, но не закрытая метка помечается отдельно
 db_query($db, "DELETE FROM codes WHERE chat_id = $chat_id");
@@ -202,7 +202,7 @@ $marked = markFoundSectors($items, $chat_id, 777);
 check('markFoundSectors(): переносит признак из БД', !empty($marked[2]['find']));
 $openList = formatCodeList($marked, 'open', 'Незакрытые метки:');
 check('найденная метка визуально отличается от ненайденной',
-    strpos($openList, '_2_ 📍') !== false && strpos($openList, '_3_ 📍') === false, $openList);
+    strpos($openList, '<i>2</i> 📍') !== false && strpos($openList, '<i>3</i> 📍') === false, $openList);
 check('markSectorFound(): без активного уровня отвечает внятно', markSectorFound($chat_id, 0, 2) === 'Нет активного уровня');
 check('markSectorFound(): несуществующая метка', markSectorFound($chat_id, 777, 42) === 'На уровне нет метки 42');
 

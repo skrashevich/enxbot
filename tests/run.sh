@@ -83,6 +83,32 @@ else
     exit 1
 fi
 
+echo "== Скриншоты: HTTPS и ошибки рендерера =="
+php "$TESTS/screenshot.php" || exit 1
+
+echo "== Запоминание движка между клиентами и процессами =="
+php "$TESTS/bindings_version.php" || exit 1
+php "$TESTS/engine_cache.php" || exit 1
+php "$TESTS/engine_resolution.php" || exit 1
+
+echo "== Текст закрытых бонусов в уведомлениях cron =="
+php "$TESTS/bonus_notifications.php" || exit 1
+
+echo "== Заголовок уровня при закрытой статистике =="
+php "$TESTS/level_text.php" || exit 1
+
+echo "== Полные названия меток в списках =="
+php "$TESTS/sector_labels.php" || exit 1
+
+echo "== Автоприём DR/ДР-кодов и английская раскладка =="
+php "$TESTS/dr_codes.php" || exit 1
+
+echo "== Прогресс уровня через encx-cli v0.26.0 =="
+php "$TESTS/sector_progress.php" || exit 1
+
+echo "== Отправка кодов: сессия, задержка и ошибки ответа =="
+php "$TESTS/code_submission.php" || exit 1
+
 echo "== Поиск удалённых в PHP 8 API =="
 php "$TESTS/check_removed_api.php" "$ROOT"/*.php || exit 1
 

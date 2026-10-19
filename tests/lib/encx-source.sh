@@ -10,7 +10,7 @@
 #
 # Переменные окружения:
 #   ENCX_REPO=/path       использовать локальный чекаут вместо GitHub (escape hatch)
-#   ENCX_REF=main         ветка/тег/коммит для клонирования (по умолчанию main)
+#   ENCX_REF=v0.26.0      ветка/тег/коммит для клонирования (по умолчанию v0.26.0)
 #   ENCX_CACHE=/path       каталог кэша (по умолчанию <repo>/tests/.cache/encx-cli)
 #   ENCX_OFFLINE=1        не ходить в сеть: требовать готовый кэш или ENCX_REPO
 
@@ -18,7 +18,7 @@ ENCX_UPSTREAM_URL="https://github.com/skrashevich/encx-cli.git"
 
 resolve_encx_source() {
     local root="$1"
-    local ref="${ENCX_REF:-main}"
+    local ref="${ENCX_REF:-v0.26.0}"
     local cache="${ENCX_CACHE:-$root/tests/.cache/encx-cli}"
 
     if [ -n "${ENCX_REPO:-}" ] && [ -d "$ENCX_REPO/bindings/php" ]; then
@@ -28,7 +28,8 @@ resolve_encx_source() {
             if [ "${ENCX_OFFLINE:-0}" != "1" ]; then
                 echo "  encx-cli: обновляю кэш ($ref)"
                 git -C "$cache" fetch --depth 1 origin "$ref" >/dev/null 2>&1 \
-                    && git -C "$cache" checkout -q FETCH_HEAD 2>/dev/null || true
+                    && git -C "$cache" checkout -q FETCH_HEAD 2>/dev/null \
+                    || { echo "  ПРОВАЛ: не удалось получить encx-cli@$ref" >&2; return 1; }
             else
                 echo "  encx-cli: офлайн, использую кэш $cache"
             fi
@@ -39,8 +40,10 @@ resolve_encx_source() {
             fi
             echo "  encx-cli: клонирую $ENCX_UPSTREAM_URL@$ref -> $cache"
             mkdir -p "$(dirname "$cache")"
-            git clone --depth 1 --branch "$ref" "$ENCX_UPSTREAM_URL" "$cache" >/dev/null 2>&1 \
-                || git clone --depth 1 "$ENCX_UPSTREAM_URL" "$cache" >/dev/null 2>&1 \
+            git init -q "$cache" \
+                && git -C "$cache" remote add origin "$ENCX_UPSTREAM_URL" \
+                && git -C "$cache" fetch --depth 1 origin "$ref" >/dev/null 2>&1 \
+                && git -C "$cache" checkout -q FETCH_HEAD \
                 || { echo "  ПРОВАЛ: не удалось клонировать encx-cli" >&2; return 1; }
         fi
         ENCX_REPO="$cache"

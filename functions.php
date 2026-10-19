@@ -33,10 +33,10 @@ function testGame($cookies,$domain,$gameid)
     return isset($model['GameTitle']) && $model['GameTitle'] !== '' ? $model['GameTitle'] : false;
 }
 
-function getLevelText($cookies,$domain,$gameid)
+function getLevelText($cookies,$domain,$gameid,$model=null)
 {
     try {
-        $model = encxGameModel($cookies, $domain, $gameid);
+        $model = $model ?? encxGameModel($cookies, $domain, $gameid);
     } catch (Throwable $e) {
         return false;
     }
@@ -46,17 +46,21 @@ function getLevelText($cookies,$domain,$gameid)
         return false;
     }
     $levelNum = $level['Number'] ?? '?';
-    $levelTotal = isset($model['Levels']) && is_array($model['Levels']) ? count($model['Levels']) : '?';
-    return "<b>Уровень $levelNum из $levelTotal</b>\n".html2text($levelText);
+    $levelTotal = isset($model['Levels']) && is_array($model['Levels']) ? count($model['Levels']) : 0;
+    $title = "Уровень $levelNum";
+    if ($levelTotal > 0 && $levelTotal >= (int)$levelNum) {
+        $title .= " из $levelTotal";
+    }
+    return "<b>$title</b>\n".html2text($levelText);
 }
 
-function getHints($cookies,$domain,$gameid,$onlyOpen=false)
+function getHints($cookies,$domain,$gameid,$onlyOpen=false,$model=null)
 {
     $hints = Array();
     $remains = Array();
     $level = null;
     try {
-        $level = encxLevel(encxGameModel($cookies, $domain, $gameid));
+        $level = encxLevel($model ?? encxGameModel($cookies, $domain, $gameid));
     } catch (Throwable $e) {
         error_log('Encounter getHints failed: '.$e->getMessage());
     }
@@ -119,10 +123,10 @@ function isGameFinishedEvent($event)
  * Возвращает null, если состояние выяснить не удалось: недоступность движка
  * не должна приводить к ложной остановке игры.
  */
-function isGameFinished($cookies,$domain,$gameid)
+function isGameFinished($cookies,$domain,$gameid,$model=null)
 {
     try {
-        $model = encxGameModel($cookies, $domain, $gameid);
+        $model = $model ?? encxGameModel($cookies, $domain, $gameid);
     } catch (Throwable $e) {
         error_log('Encounter isGameFinished failed: '.$e->getMessage());
         return null;
@@ -145,19 +149,72 @@ function getScheme($cookies,$domain,$gameid)
     return preg_match('#<img[^>]+src=["\'](.*?)["\']#is', $task, $matches) ? $matches[1] : false;
 }
 
+function codeUnavailableLevelResult($model, $knownLevelId = 0, $answerResult = '')
+{
+    $event = (int)($model['Event'] ?? 0);
+    $finished = isGameFinishedEvent($event);
+    if ($answerResult !== '') {
+        $message = $answerResult;
+    } elseif ($event === 4) {
+        $message = 'Сессия Encounter недействительна. Выполните /game auth';
+    } elseif ($finished) {
+        $message = 'Игра завершена';
+    } else {
+        $message = $event !== 0 ? Encx\Helpers::eventText($event) : 'Движок не вернул текущий уровень';
+    }
+    return Array('result' => $message, 'levelid' => $finished ? -1 : $knownLevelId, 'UP' => false);
+}
+
+/** Match sectors within one level by ID, with Order as the legacy fallback. */
+function closedSectorLabels($oldLevel, $newLevel, $levelCompleted = false)
+{
+    $before = array();
+    foreach (array_values($oldLevel['Sectors'] ?? array()) as $index => $sector) {
+        $number = (int)($sector['Order'] ?? 0);
+        if ($number <= 0) $number = $index + 1;
+        $id = (int)($sector['SectorId'] ?? 0);
+        $key = $id > 0 ? 'id:'.$id : 'order:'.$number;
+        $name = trim((string)($sector['Name'] ?? ''));
+        $before[$key] = array('found' => !empty($sector['IsAnswered']), 'label' => $name !== '' ? $name : '№ '.$number);
+    }
+    if ($newLevel === null || (int)($oldLevel['LevelId'] ?? 0) !== (int)($newLevel['LevelId'] ?? 0)) {
+        if (!$levelCompleted) return array();
+        // After a transition the response may contain only the next level.
+        // The sole remaining sector is unambiguous; never guess among several.
+        $open = array_values(array_filter($before, static fn($sector) => !$sector['found']));
+        return count($open) === 1 ? array($open[0]['label']) : array();
+    }
+    $after = array();
+    foreach (array_values($newLevel['Sectors'] ?? array()) as $index => $sector) {
+        $number = (int)($sector['Order'] ?? 0);
+        if ($number <= 0) $number = $index + 1;
+        $id = (int)($sector['SectorId'] ?? 0);
+        $key = $id > 0 ? 'id:'.$id : 'order:'.$number;
+        $after[$key] = !empty($sector['IsAnswered']);
+    }
+    $labels = array();
+    foreach ($before as $key => $sector) {
+        if (!$sector['found'] && !empty($after[$key])) $labels[] = $sector['label'];
+    }
+    return $labels;
+}
+
 function sendCode($cookies,$domain,$gameid,$code)
 {
     $bonusAccepted = false;
+    $codeAttempted = false;
+    $levelId = 0;
     try {
         $client = encxClient($domain, $cookies);
         try {
             $before = encxDecode($client->getGameModel((int)$gameid));
             $oldLevel = encxLevel($before);
             if ($oldLevel === null) {
-                return Array('result' => '', 'levelid' => -1, 'UP' => false);
+                return codeUnavailableLevelResult($before);
             }
             $levelId = (int)($oldLevel['LevelId'] ?? 0);
             $levelNumber = (int)($oldLevel['Number'] ?? 0);
+            $codeAttempted = true;
             $after = encxDecode($client->sendCode((int)$gameid, $levelId, $levelNumber, (string)$code));
 
             // Encounter принимает ответы на секторы и на бонусы разными полями формы,
@@ -176,7 +233,12 @@ function sendCode($cookies,$domain,$gameid,$code)
         }
     } catch (Throwable $e) {
         error_log('Encounter sendCode failed: '.$e->getMessage());
-        return Array('result' => '', 'levelid' => 0, 'UP' => false);
+        // A timed-out POST may already have been applied. Never replay it or
+        // report the code as rejected without an engine acknowledgement.
+        $message = $codeAttempted
+            ? 'Движок не подтвердил результат отправки. Код мог быть принят; проверьте его в игре перед повторной отправкой.'
+            : 'Не удалось получить состояние игры. Код не отправлен.';
+        return Array('result' => $message, 'levelid' => $levelId, 'UP' => false);
     }
 
     if (!empty($bonusAccepted)) {
@@ -187,22 +249,35 @@ function sendCode($cookies,$domain,$gameid,$code)
     }
     $result = $accepted === true ? 'Код принят' : ($accepted === false ? 'Код не принят' : '');
     $newLevel = encxLevel($after);
-    if ($newLevel === null) {
-        return Array('result' => $result !== '' ? $result : 'Игра завершена', 'levelid' => -1, 'UP' => false);
-    }
-
     $newLevelId = (int)($newLevel['LevelId'] ?? 0);
+    $levelCompleted = isGameFinishedEvent($after['Event'] ?? 0)
+        || ($newLevelId > 0 && $newLevelId !== $levelId);
+    $closedText = '';
+    if ($accepted === true && !$bonusAccepted) {
+        $labels = closedSectorLabels($oldLevel, $newLevel, $levelCompleted);
+        if (count($labels) === 1) {
+            $closedText = "\nЗакрыт сектор: ".$labels[0];
+        } elseif ($labels) {
+            $closedText = "\nЗакрыты секторы:\n• ".implode("\n• ", $labels);
+        }
+    }
+    // On transition, describe the level the code was submitted to.
+    $progressLevel = $newLevelId === $levelId ? $newLevel : ($levelCompleted ? $oldLevel : null);
+    $progress = encxSectorProgress($progressLevel, $levelCompleted);
+    $total = $progress['total'];
+    $progressText = '';
+    if ($total > 0) {
+        $done = $progress['done'];
+        if (!$levelCompleted) $result .= " ($done/$total)";
+        $remaining = $progress['remaining'];
+        $progressText = "\nВсего секторов: $total. Осталось до АП: $remaining.";
+    }
+    $result .= $closedText.$progressText;
+    if ($newLevel === null) {
+        return codeUnavailableLevelResult($after, $levelId, $result);
+    }
     if ($newLevelId > 0 && $newLevelId !== $levelId) {
         return Array('result' => $result, 'levelid' => $newLevelId, 'UP' => true);
-    }
-
-    $total = count($newLevel['Sectors'] ?? array());
-    if ($total > 0) {
-        $done = 0;
-        foreach ($newLevel['Sectors'] as $sector) {
-            $done += !empty($sector['IsAnswered']) ? 1 : 0;
-        }
-        $result .= " ($done/$total)";
     }
 
     $oldBonuses = array();
@@ -227,6 +302,28 @@ function sendCode($cookies,$domain,$gameid,$code)
     return Array('result' => $result, 'levelid' => $newLevelId ?: $levelId, 'UP' => false);
 }
 
+/** Accept a whole DR code, optionally followed by the usual // comment. */
+function isDrCodeMessage($text)
+{
+    $code = trim(explode('//', (string)$text, 2)[0]);
+    return preg_match('/\A(?:dr|др)[0-9][a-zа-яё0-9_-]*\z/iu', $code) === 1;
+}
+
+/** Unify DR/ДР and fix Russian keyboard letters in the code, not its comment. */
+function normalizeDrCode($code)
+{
+    $trimmed = trim((string)$code);
+    if (!preg_match('/\A(?:dr|др)(?=[0-9])/iu', $trimmed, $prefix)) return $code;
+    static $layout = null;
+    if ($layout === null) {
+        $lower = preg_split('//u', 'ёйцукенгшщзхъфывапролджэячсмитьбю', -1, PREG_SPLIT_NO_EMPTY);
+        $upper = preg_split('//u', 'ЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ', -1, PREG_SPLIT_NO_EMPTY);
+        $layout = array_combine($lower, str_split('`qwertyuiop[]asdfghjkl;\'zxcvbnm,.'))
+            + array_combine($upper, str_split('~QWERTYUIOP{}ASDFGHJKL:"ZXCVBNM<>'));
+    }
+    return 'dr'.strtr(substr($trimmed, strlen($prefix[0])), $layout);
+}
+
 function parseCode($text, $chat_id, $sender, $location=Array())
 {
   global $db;
@@ -248,7 +345,7 @@ function parseCode($text, $chat_id, $sender, $location=Array())
 
   // Пробиваем в движок все до символов //, остальное - комментарий
   $parts = explode('//', substr($text,1), 2);
-  $code = $parts[0];
+  $code = normalizeDrCode($parts[0]);
   $comment = isset($parts[1]) ? $parts[1] : '';
 
   // Если не принимать код без комментария и комментария нет
@@ -350,11 +447,11 @@ function synthSectorForLevel($level)
     if (!is_array($level)) {
         return Array('sectors' => Array(), 'text' => null);
     }
-    $requiredSectors = (int)($level['RequiredSectorsCount'] ?? 0);
-    if ($requiredSectors <= 0 || !empty($level['Dismissed'])) {
+    $progress = encxSectorProgress($level);
+    if ($progress['remaining'] === null || $progress['required'] <= 0 || !empty($level['Dismissed'])) {
         return Array('sectors' => Array(), 'text' => null);
     }
-    $passed = !empty($level['IsPassed']) || (int)($level['PassedSectorsCount'] ?? 0) > 0;
+    $passed = $progress['remaining'] === 0;
     return Array(
         'sectors' => Array(1 => Array('found' => $passed, 'code' => '')),
         'text' => $passed
@@ -363,14 +460,14 @@ function synthSectorForLevel($level)
     );
 }
 
-function getSectors($cookies,$domain,$gameid)
+function getSectors($cookies,$domain,$gameid,$model=null)
 {
     $result = Array(
       'text' => "На уровне нет разделения по секторам",
       'sectors' => Array(),
     );
     try {
-        $level = encxLevel(encxGameModel($cookies, $domain, $gameid));
+        $level = encxLevel($model ?? encxGameModel($cookies, $domain, $gameid));
     } catch (Throwable $e) {
         error_log('Encounter getSectors failed: '.$e->getMessage());
         return $result;
@@ -386,40 +483,39 @@ function getSectors($cookies,$domain,$gameid)
       }
       return $result;
     }
-    $sectors_total = count($level['Sectors']);
-    $sectors_done = 0;
+    $progress = encxSectorProgress($level);
+    $sectors_total = $progress['total'];
+    $sectors_done = $progress['done'];
     foreach ($level['Sectors'] as $sector) {
         $number = (int)($sector['Order'] ?? 0);
         if ($number <= 0) {
             $number = count($result['sectors']) + 1;
         }
         $found = !empty($sector['IsAnswered']);
-        if ($found) {
-            $sectors_done++;
-        }
         $result['sectors'][$number] = Array(
             'found' => $found,
             'code' => $found ? encxAnswerText($sector['Answer'] ?? null) : '',
+            'label' => trim((string)($sector['Name'] ?? '')),
         );
     }
-    $sectors_rem = $sectors_total - $sectors_done;
-    $result['text'] = "На уровне $sectors_total сектора. Закрыто $sectors_done. Осталось закрыть $sectors_rem";
+    $sectors_rem = $progress['remaining'];
+    $result['text'] = "На уровне $sectors_total сектора. Закрыто $sectors_done. Осталось до АП: $sectors_rem";
     ksort($result['sectors'], SORT_NUMERIC);
     return $result;
 }
 
 /**
  * Бонусы текущего уровня из игровой модели движка.
- * Возвращает сводный текст и массив вида номер => [found, code, name].
+ * Возвращает сводный текст и массив вида номер => [found, code, name, text].
  */
-function getBonuses($cookies,$domain,$gameid)
+function getBonuses($cookies,$domain,$gameid,$model=null)
 {
     $result = Array(
       'text' => "На уровне нет бонусов",
       'bonuses' => Array(),
     );
     try {
-        $level = encxLevel(encxGameModel($cookies, $domain, $gameid));
+        $level = encxLevel($model ?? encxGameModel($cookies, $domain, $gameid));
     } catch (Throwable $e) {
         error_log('Encounter getBonuses failed: '.$e->getMessage());
         return $result;
@@ -442,6 +538,7 @@ function getBonuses($cookies,$domain,$gameid)
             'found' => $found,
             'code' => $found ? encxAnswerText($bonus['Answer'] ?? null) : '',
             'name' => trim((string)($bonus['Name'] ?? '')),
+            'text' => trim(html2text((string)($bonus['Task'] ?? ''))),
         );
     }
     $result['text'] = "На уровне $total бонусов. Взято $done. Осталось ".($total - $done);
@@ -449,10 +546,37 @@ function getBonuses($cookies,$domain,$gameid)
     return $result;
 }
 
-function getMessages($cookies,$domain,$gameid)
+/** Closure notice, answer code and optional bonus text, escaped for Telegram HTML. */
+function engineClosureMessages($label, $number, $text = '', $code = '', $remaining = null)
+{
+    $messages = array(htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+        .' <b>'.intval($number).'</b> закрыт через движок');
+    $body = trim((string)$text);
+    $code = (string)$code;
+    if (trim($code) !== '') {
+        $body = 'Код: '.$code.($body !== '' ? "\n\n".$body : '');
+    }
+    if ($remaining !== null) {
+        $body .= ($body !== '' ? "\n\n" : '').'Кодов до АП: '.max(0, (int)$remaining).'.';
+    }
+    // At most 4000 UTF-16 units per chunk, leaving room for the first header.
+    // Split before escaping so HTML entities and UTF-8 characters stay intact.
+    preg_match_all('/.{1,2000}/us', $body, $chunks);
+    foreach ($chunks[0] as $index => $chunk) {
+        $escaped = htmlspecialchars($chunk, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        if ($index === 0) {
+            $messages[0] .= "\n\n".$escaped;
+        } else {
+            $messages[] = $escaped;
+        }
+    }
+    return $messages;
+}
+
+function getMessages($cookies,$domain,$gameid,$model=null)
 {
     try {
-        $level = encxLevel(encxGameModel($cookies, $domain, $gameid));
+        $level = encxLevel($model ?? encxGameModel($cookies, $domain, $gameid));
     } catch (Throwable $e) {
       return Array('Нет сообщений организатора');
     }
@@ -548,6 +672,7 @@ function settingsToggles()
 {
   return Array(
     'noprefix'        => 'Прием стандартных кодов без префикса',
+    'dr_noprefix'     => 'Принимать DR/ДР-коды без префикса',
     'nocomment'       => 'Не принимать код без примечания',
     'megadzr'         => 'Принимать любое число как код',
     'optimize_chat'   => 'Удалять устаревшие списки в чате',
@@ -649,13 +774,14 @@ function sendChatList($chat_id, $key, $text, $parse_mode = 'Markdown')
 }
 
 /**
- * Формирует текст списка меток или бонусов.
+ * Формирует HTML-текст списка меток или бонусов для Telegram.
  * $mode: all - все, open - только незакрытые, closed - только закрытые.
  * Найденная в поле, но ещё не взятая метка (find) помечается отдельно.
  */
 function formatCodeList($items, $mode, $title)
 {
   $lines = Array();
+  $title = htmlspecialchars((string)$title, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
   foreach($items as $num => $item)
   {
@@ -667,16 +793,21 @@ function formatCodeList($items, $mode, $title)
     if(($mode === 'open' && $found) || ($mode === 'closed' && !$found))
       continue;
 
-    $label = (string)$num;
-    if(!empty($item['name']))
-      $label .= ' '.$item['name'];
+    $label = trim((string)($item['label'] ?? ''));
+    if($label === '')
+    {
+      $label = (string)$num;
+      if(!empty($item['name']))
+        $label .= ' '.$item['name'];
+    }
+    $label = htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
     if($found)
     {
-      $lines[] = "*$label:\t".$item['code']."*";
+      $lines[] = "<b>$label:\t".htmlspecialchars((string)$item['code'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')."</b>";
     } else
     {
-      $lines[] = empty($item['find']) ? "_{$label}_" : "_{$label}_ 📍";
+      $lines[] = empty($item['find']) ? "<i>$label</i>" : "<i>$label</i> 📍";
     }
   }
 
@@ -1346,7 +1477,7 @@ function pointDistance($lat1, $lon1, $lat2, $lon2)
 
 function screenshot($sendFlag, $chat_id, $cookies, $domain, $gameid, $lastlevelid)
 {
-  $url = 'http://'.$domain.'/gameengines/encounter/play/'.$gameid.'?lang=ru';
+  $url = (encxUsesHTTP($domain) ? 'http://' : 'https://').$domain.'/gameengines/encounter/play/'.intval($gameid).'?lang=ru';
   $filename = "screens/".$chat_id.".$gameid.".intval($lastlevelid).".".microtime(true).'.png';
   // Получаем нужные куки
   $cookies = encxCookieHeader($cookies);
@@ -1365,7 +1496,21 @@ function screenshot($sendFlag, $chat_id, $cookies, $domain, $gameid, $lastleveli
   } else
   {
     $args = array($url, $filename, $guid, $stoken, $domaincookie, $atoken);
-    exec(escapeshellcmd(PHANTOMJS).' enscreen.js '.implode(' ', array_map('escapeshellarg', $args)));
+    $output = array();
+    $exitCode = 0;
+    exec(escapeshellcmd(PHANTOMJS).' enscreen.js '.implode(' ', array_map('escapeshellarg', $args)), $output, $exitCode);
+    if($exitCode !== 0 || !is_file($filename))
+    {
+      if(is_file($filename)) unlink($filename);
+      if($sendFlag)
+      {
+        $message = $exitCode === 2
+          ? 'Сессия Encounter недействительна. Выполните /game auth и повторите /screenshot'
+          : 'Ошибка: не удалось получить скриншот';
+        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => $message));
+      }
+      return false;
+    }
     if($sendFlag)
     {
       if(file_exists($filename))

@@ -658,7 +658,7 @@ if(isset($update["message"]))
                         $items = markFoundSectors($sectors['sectors'], $game_chat_id, $settings['last_level_id']);
                     }
 
-                    sendChatList($chat_id, $listKey, formatCodeList($items, $listMode, $listTitle));
+                    sendChatList($chat_id, $listKey, formatCodeList($items, $listMode, $listTitle), 'HTML');
                 break;
                 case '/messages':
                     if(!$settings['status'])
@@ -846,6 +846,8 @@ help - эта справка";
             ( preg_match('#^[en1234567890]{3,}#', $text) && get_setting('noprefix', $chat_id) == 'true' ) // Соответствует регулярке на стандартный код и включена опция безпрефиксного приема стандартных кодов
             ||
             ( preg_match('#^\d{3,}$#', trim($text)) && get_setting('megadzr', $chat_id) == 'true' ) // Режим, в котором кодом считается любое число
+            ||
+            (isDrCodeMessage($text) && get_setting('dr_noprefix', $chat_id) == 'true')
         )
         {
             $sender = trim((isset($message['from']['first_name']) ? $message['from']['first_name'] : '').' '.(isset($message['from']['last_name']) ? $message['from']['last_name'] : ''));
@@ -857,7 +859,7 @@ help - эта справка";
 
             if(!$result)
                 $result = "Ошибка";
-            apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "parse_mode" => 'Markdown', "text" => $result));
+            apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
         }
     }
 

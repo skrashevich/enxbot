@@ -41,6 +41,8 @@ $legacy->exec(file_get_contents(__DIR__.'/schema.legacy.sql'));
 $legacy->exec("INSERT INTO games (chat_id, game_id, game_domain, last_level_id, status) VALUES (-4242, 999, 'example.org', 555, 1)");
 $legacy->exec("INSERT INTO codes (chat_id, level, code_number, code_status, code) VALUES (-4242, 555, 3, 1, 'секрет')");
 $legacy->exec("INSERT INTO settings (chat_id, name, value) VALUES (-4242, 'noprefix', 'true')");
+$legacy->exec("CREATE TABLE engine_cache (domain TEXT PRIMARY KEY, engine TEXT NOT NULL)");
+$legacy->exec("INSERT INTO engine_cache (domain, engine) VALUES ('old.en.cx', 'legacy')");
 $legacy = null;
 
 // 2. Подключаемся штатным способом - db.php должен мигрировать схему.
@@ -61,6 +63,10 @@ foreach ($db->query("SELECT name FROM sqlite_master WHERE type = 'table'") as $r
 
 echo "== Миграция со старой схемы ==\n";
 
+check('engine_cache создана', in_array('engine_cache', $tables, true));
+check('engine_cache.confirmed добавлена', in_array('confirmed', $columns('engine_cache'), true));
+$cached = db_fetch_assoc(db_query($db, "SELECT * FROM engine_cache WHERE domain='old.en.cx'"));
+check('старый выбор движка сохранён как неподтверждённый', $cached['engine'] === 'legacy' && (int)$cached['confirmed'] === 0);
 check('games.shtab_id добавлена', in_array('shtab_id', $columns('games'), true));
 check('codes.code_type добавлена', in_array('code_type', $columns('codes'), true));
 check('codes.find добавлена', in_array('find', $columns('codes'), true));

@@ -22,18 +22,19 @@ function encxBindingsPath()
 
 function encxLoadBindings()
 {
-    if (class_exists('Encx\\Client', false)) {
-        return;
+    if (!class_exists('Encx\\Client') || !class_exists('Encx\\Helpers')) {
+        $autoload = encxBindingsPath().'/autoload.php';
+        if (!is_file($autoload)) {
+            throw new RuntimeException(
+                'PHP-биндинги encx-cli не найдены: '.$autoload.
+                '. Задайте ENCX_BINDINGS_PATH.'
+            );
+        }
+        require_once $autoload;
     }
-
-    $autoload = encxBindingsPath().'/autoload.php';
-    if (!is_file($autoload)) {
-        throw new RuntimeException(
-            'PHP-биндинги encx-cli не найдены: '.$autoload.
-            '. Задайте ENCX_BINDINGS_PATH.'
-        );
+    if (!method_exists('Encx\\Client', 'resolveEngine') || !method_exists('Encx\\Helpers', 'levelSectorProgress')) {
+        throw new RuntimeException('Требуются PHP-биндинги encx-cli v0.26.0 или новее. Пересоберите libencx и биндинги вместе.');
     }
-    require_once $autoload;
 }
 
 function encxBoolEnv($name, $default)
@@ -108,19 +109,66 @@ function encxCookieHeader($cookies)
     return implode('; ', $parts).($parts ? ';' : '');
 }
 
+/** Persist only confirmed library selections; null leaves auto retryable. */
+function encxResolvedEngine($domain, $client)
+{
+    global $db;
+    static $known = array();
+    $key = strtolower(trim((string)$domain));
+    if (isset($known[$key])) {
+        return $known[$key];
+    }
+    if (isset($db) && $db instanceof PDO) {
+        $read = $db->prepare('SELECT engine FROM engine_cache WHERE domain = :domain AND confirmed = 1');
+        $read->execute(array(':domain' => $key));
+        $cached = $read->fetchColumn();
+        if (in_array($cached, array('legacy', 'new'), true)) {
+            return $known[$key] = $cached;
+        }
+    }
+    $resolution = encxDecode($client->resolveEngine());
+    $engine = $resolution['engine'] ?? null;
+    if (!in_array($engine, array('legacy', 'new'), true)) {
+        throw new RuntimeException('Не удалось определить движок Encounter');
+    }
+    if (($resolution['definitive'] ?? false) !== true) {
+        return null;
+    }
+    if (isset($db) && $db instanceof PDO) {
+        $write = $db->prepare('INSERT INTO engine_cache (domain, engine, confirmed) VALUES (:domain, :engine, 1)'
+            .' ON CONFLICT(domain) DO UPDATE SET engine = excluded.engine, confirmed = 1 WHERE engine_cache.confirmed = 0');
+        $write->execute(array(':domain' => $key, ':engine' => $engine));
+        // A concurrent first action may already have saved the domain's selection.
+        $read->execute(array(':domain' => $key));
+        $engine = $read->fetchColumn();
+    }
+    return $known[$key] = $engine;
+}
+
 function encxClient($domain, $cookies = '')
 {
     encxLoadBindings();
 
+    $timeoutSeconds = 60;
     $client = Encx\Client::newClientWithOptions(
         (string)$domain,
         encxBoolEnv('ENCX_INSECURE_TLS', false),
         encxUsesHTTP((string)$domain),
-        60,
+        $timeoutSeconds,
         'ru'
     );
-    $engine = getenv('ENCX_ENGINE');
-    $client->setEngine(is_string($engine) && $engine !== '' ? $engine : 'auto');
+    // The mobile-backed bindings otherwise limit code POSTs to one second,
+    // independently of the HTTP timeout passed to the constructor.
+    $client->setCodeSendTimeoutSeconds($timeoutSeconds);
+    $engine = strtolower(trim((string)getenv('ENCX_ENGINE')));
+    $client->setEngine(in_array($engine, array('legacy', 'new'), true) ? $engine : 'auto');
+    if (!in_array($engine, array('legacy', 'new'), true)) {
+        // A failed probe is a temporary fallback, not a backend selection.
+        $resolved = encxResolvedEngine($domain, $client);
+        if ($resolved !== null) {
+            $client->setEngine($resolved);
+        }
+    }
 
     $cookies = encxNormalizeCookies($cookies);
     if ($cookies !== '') {
@@ -168,6 +216,16 @@ function encxEnterGame($cookies, $domain, $gameid)
 function encxLevel($model)
 {
     return isset($model['Level']) && is_array($model['Level']) ? $model['Level'] : null;
+}
+
+/** Adapt a snapshot to the library's progress helper; never recalculate it here. */
+function encxSectorProgress($level, $completed = false)
+{
+    encxLoadBindings();
+    if ($completed && is_array($level)) {
+        $level['IsPassed'] = true;
+    }
+    return encxDecode(Encx\Helpers::levelSectorProgress(json_encode($level, JSON_THROW_ON_ERROR)));
 }
 
 function encxTaskHTML($level)

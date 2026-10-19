@@ -1,7 +1,8 @@
 FROM golang:1.27-bookworm AS encx-builder
 
 WORKDIR /src/encx-cli
-ADD https://github.com/skrashevich/encx-cli/archive/refs/heads/main.tar.gz /tmp/encx-cli.tar.gz
+ARG ENCX_VERSION=v0.26.0
+ADD https://github.com/skrashevich/encx-cli/archive/refs/tags/${ENCX_VERSION}.tar.gz /tmp/encx-cli.tar.gz
 RUN tar -xzf /tmp/encx-cli.tar.gz --strip-components=1 \
     && rm /tmp/encx-cli.tar.gz
 RUN bash bindings/php/build.sh
@@ -31,9 +32,10 @@ RUN python3 -c "import py_compile; py_compile.compile('/usr/local/bin/enxbot-scr
     && chown -R www-data:www-data /data /app/screens
 
 ENV ENCX_BINDINGS_PATH=/opt/encx-php \
+    HOME=/tmp \
     ENXBOT_SQLITE_PATH=/data/enxbot.sqlite \
     ENXBOT_PID_FILE=/tmp/enxbot-daemon.pid \
-    ENXBOT_CRON_INTERVAL=60 \
+    ENXBOT_CRON_INTERVAL=5 \
     ENXBOT_POLL_TIMEOUT=30 \
     ENXBOT_POLL_RETRY_DELAY=5
 

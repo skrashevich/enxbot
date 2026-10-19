@@ -88,9 +88,9 @@ check('getBonuses() пересчитывает остаток', strpos($bonusesA
 // Списки бонусов формируются по своим режимам отбора
 $openBonuses = formatCodeList($bonusesAfter['bonuses'], 'open', 'Незакрытые бонусы:');
 $closedBonuses = formatCodeList($bonusesAfter['bonuses'], 'closed', 'Закрытые бонусы:');
-check('список незакрытых бонусов не содержит взятый', strpos($openBonuses, "_{$bonusNumber} ") === false && strpos($openBonuses, "_{$bonusNumber}_") === false, $openBonuses);
-// Взятый бонус выводится жирным: "*N имя:<tab>код*"
-$closedMarker = strpos($closedBonuses, "*{$bonusNumber} ") !== false || strpos($closedBonuses, "*{$bonusNumber}:") !== false;
+check('список незакрытых бонусов не содержит взятый', strpos($openBonuses, "<i>{$bonusNumber} ") === false && strpos($openBonuses, "<i>{$bonusNumber}</i>") === false, $openBonuses);
+// Взятый бонус выводится жирным: "<b>N имя:<tab>код</b>"
+$closedMarker = strpos($closedBonuses, "<b>{$bonusNumber} ") !== false || strpos($closedBonuses, "<b>{$bonusNumber}:") !== false;
 check('список закрытых бонусов содержит взятый', $closedMarker, $closedBonuses);
 check('в списке закрытых бонусов ровно одна строка', substr_count($closedBonuses, "\n") === 1, $closedBonuses);
 check('пустой список бонусов выводится явно', formatCodeList(array(), 'all', 'Все бонусы:') === "Все бонусы:\n(пусто)");

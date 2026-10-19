@@ -14,6 +14,10 @@ from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 
+class AuthenticationRequired(RuntimeError):
+    """The game returned a sign-in page instead of an authenticated screen."""
+
+
 class Driver:
     def __init__(self, port):
         self.base = f"http://127.0.0.1:{port}"
@@ -67,6 +71,9 @@ def render(args):
                 "browserName": "chrome",
                 "goog:chromeOptions": {"binary": "/usr/bin/chromium", "args": [
                     "--headless", "--no-sandbox", "--disable-dev-shm-usage",
+                    # Legacy Encounter binds cookies to the User-Agent used at login.
+                    # PHP's Encx client uses encx-cli; Chromium must use it too.
+                    "--user-agent=encx-cli",
                     "--disable-background-networking", "--no-first-run",
                     "--window-size=768,1024", f"--user-data-dir={profile}"]}
             }}})
@@ -85,6 +92,17 @@ def render(args):
                 for name, value in cookies.items()]})
             client.call("POST", session + "/url", {"url": url})
             time.sleep(0.2)
+            page = client.call("POST", session + "/execute/sync", {
+                "script": """
+                    return {
+                        path: location.pathname.toLowerCase(),
+                        loginForm: !!document.querySelector(
+                            'input[name="Login"], input[name="txtLogin"]') &&
+                            !!document.querySelector('input[type="password"]')
+                    };
+                """, "args": []})
+            if page["path"] in ("/login.aspx", "/simplelogin.aspx", "/login/signin") or page["loginForm"]:
+                raise AuthenticationRequired()
             png = base64.b64decode(cdp("Page.captureScreenshot", {
                 "format": "png", "captureBeyondViewport": True,
                 "clip": {"x": 0, "y": 0, "width": 768,
@@ -118,6 +136,9 @@ def main():
     try:
         render(sys.argv[1:])
         return 0
+    except AuthenticationRequired:
+        print("Screenshot authentication required", file=sys.stderr)
+        return 2
     except Exception as error:
         # WebDriver exceptions can contain URLs and credentials: never log their payloads.
         print(f"Screenshot failed ({type(error).__name__})", file=sys.stderr)

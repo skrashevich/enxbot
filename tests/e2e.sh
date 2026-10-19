@@ -19,7 +19,7 @@
 # сообщения бота (через Admin API мока), и состояние в SQLite.
 #
 # Требования: bash, php 8.x (pdo_sqlite, curl, mbstring, ffi, openssl),
-#             go 1.22+, git, curl. encx-cli (биндинги + cmd/encx-mock) и
+#             go 1.27+, git, curl. encx-cli (биндинги + cmd/encx-mock) и
 #             telegram-mock-ai тянутся из апстрима на GitHub и кэшируются
 #             (encx-cli — в tests/.cache/, telegram-mock-ai — во временном
 #             каталоге). Локальные чекауты навязываются через ENCX_REPO=/path
