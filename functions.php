@@ -395,7 +395,7 @@ function sendCode($cookies,$domain,$gameid,$code)
         $done = $progress['done'];
         if (!$levelCompleted) $result .= " ($done/$total)";
         $remaining = $progress['remaining'];
-        $progressText = "\nВсего секторов: $total. Осталось до АП: $remaining.";
+        $progressText = "\nВсего секторов: $total.\nОсталось до АП: $remaining.";
     }
     $result .= $closedText.$progressText;
     if ($newLevel === null) {
