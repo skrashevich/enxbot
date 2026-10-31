@@ -92,6 +92,13 @@ if (strpos($path, '/tg/') === 0) {
     }
     $failMode = trim((string)$failMode);
 
+    if ($method === 'sendRichMessage' && $failMode === 'rich400') {
+        http_response_code(400);
+        header('Content-Type: application/json');
+        echo json_encode(['ok'=>false,'error_code'=>400,'description'=>'Bad Request: rich message rejected']);
+        return true;
+    }
+
     if ($failMode !== '' && $method === 'getUpdates') {
         if ($failMode === '401') {
             http_response_code(401);

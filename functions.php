@@ -54,6 +54,131 @@ function getLevelText($cookies,$domain,$gameid,$model=null)
     return "<b>$title</b>\n".html2text($levelText);
 }
 
+/** Resolve task links without forwarding the bot's cookies or credentials. */
+function levelRichUrl($url, $base, $media = false)
+{
+    $url = str_replace(' ', '%20', trim((string)$url));
+    if ($url === '' || preg_match('/[\x00-\x1f\x7f]/', $url)) return '';
+    if (!$media && ($url[0] === '#' || preg_match('#^(mailto:|tel:|tg://user\?id=[0-9]+$)#i', $url))) return $url;
+    $parts = parse_url($url);
+    if ($parts === false) return '';
+    if (isset($parts['scheme'])) return in_array(strtolower($parts['scheme']), ['http','https'], true) && !empty($parts['host']) ? $url : '';
+    $origin = parse_url($base);
+    if (str_starts_with($url, '//')) return $origin['scheme'].':'.$url;
+    $path = $parts['path'] ?? '';
+    $path = $path === '' ? $origin['path'] : ($path[0] === '/' ? $path : dirname($origin['path']).'/'.$path);
+    $segments = [];
+    foreach (explode('/', $path) as $segment) {
+        if ($segment === '..') array_pop($segments);
+        elseif ($segment !== '' && $segment !== '.') $segments[] = $segment;
+    }
+    return $origin['scheme'].'://'.$origin['host'].(isset($origin['port']) ? ':'.$origin['port'] : '')
+        .'/'.implode('/', $segments).(isset($parts['query']) ? '?'.$parts['query'] : '').(isset($parts['fragment']) ? '#'.$parts['fragment'] : '');
+}
+
+/** Keep media outside paragraph/inline wrappers, as required by Rich HTML. */
+function wrapLevelRichHtml($tag, $attributes, $content)
+{
+    if (!preg_match('/^(p|h[1-6]|b|strong|i|em|u|ins|s|strike|del|code|mark|sub|sup|a|tg-spoiler)$/', $tag)) return '<'.$tag.$attributes.'>'.$content.'</'.$tag.'>';
+    $result = '';
+    foreach (preg_split('/(\x1f[0-9]+\x1f)/', $content, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY) as $part) {
+        $result .= preg_match('/^\x1f[0-9]+\x1f$/', $part) ? $part : '<'.$tag.$attributes.'>'.$part.'</'.$tag.'>';
+    }
+    return $result;
+}
+
+/** Project website markup onto the documented Rich HTML subset. */
+function renderLevelRichNode($node, &$context, $inline = false, $depth = 0)
+{
+    $escape = static fn($text) => htmlspecialchars((string)$text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    if ($node instanceof DOMText) return $escape($node->nodeValue);
+    if (!($node instanceof DOMElement)) return '';
+    $tag = strtolower($node->tagName);
+    if (in_array($tag, ['script','style','head','title','form','button','object','embed','source','base','meta','link'], true)) return '';
+    if ($tag === 'br') return '<br/>';
+    if ($tag === 'hr') return $inline ? '<br/>' : '<hr/>';
+    if ($tag === 'input') return strtolower($node->getAttribute('type')) === 'checkbox' ? ($node->hasAttribute('checked') ? '☑ ' : '☐ ') : '';
+    if ($tag === 'iframe') {
+        $url = levelRichUrl($node->getAttribute('src'), $context['base'], true);
+        return $url !== '' ? '<a href="'.$escape($url).'">Видео</a>' : '';
+    }
+    if (in_array($tag, ['img','video','audio'], true)) {
+        $src = $node->getAttribute('src');
+        if ($src === '' && $node->getElementsByTagName('source')->length) $src = $node->getElementsByTagName('source')->item(0)->getAttribute('src');
+        $url = levelRichUrl($src, $context['base'], true);
+        $alt = $node->getAttribute('alt') ?: ['img'=>'Изображение','video'=>'Видео','audio'=>'Аудио'][$tag];
+        if ($url === '') return $escape($alt);
+        if ($inline || $depth >= 14 || count($context['media']) >= 50) return '<a href="'.$escape($url).'">'.$escape($alt).'</a>';
+        $token = "\x1f".count($context['media'])."\x1f";
+        $context['media'][$token] = '<'.$tag.' src="'.$escape($url).'"'.($node->hasAttribute('tg-spoiler') ? ' tg-spoiler' : '').($tag === 'img' ? '/>' : '></'.$tag.'>');
+        return $token;
+    }
+    if ($tag === 'pre') {
+        if ($inline) return '<code>'.$escape($node->textContent).'</code>';
+        $code = $node->getElementsByTagName('code')->item(0);
+        $class = $code && preg_match('/^language-[a-z0-9_+-]{1,30}$/i', $code->getAttribute('class')) ? ' class="'.$escape($code->getAttribute('class')).'"' : '';
+        return '<pre>'.($class !== '' ? '<code'.$class.'>' : '').$escape($node->textContent).($class !== '' ? '</code>' : '').'</pre>';
+    }
+    if ($tag === 'span' && in_array('tg-spoiler', explode(' ', $node->getAttribute('class')), true)) $tag = 'tg-spoiler';
+    $allowed = ['p','h1','h2','h3','h4','h5','h6','b','strong','i','em','u','ins','s','strike','del','code','mark','sub','sup','tg-spoiler',
+        'a','ul','ol','li','blockquote','aside','cite','footer','figure','figcaption','table','tr','td','th','caption','details','summary','tg-math','tg-math-block'];
+    $known = in_array($tag, $allowed, true);
+    $content = '';
+    $childInline = $inline || in_array($tag, ['td','th','caption','figcaption','summary','aside','footer','cite'], true)
+        || ($tag === 'blockquote' && $node->hasAttribute('expandable'));
+    foreach ($node->childNodes as $child) $content .= renderLevelRichNode($child, $context, $childInline, $depth + ($known ? 1 : 0));
+    if (in_array($tag, ['div','center','section','article'], true)) {
+        return preg_match('#<(p|h[1-6]|table|ul|ol|pre|details|blockquote|figure)\b#', $content) || $inline ? $content."\n" : wrapLevelRichHtml('p', '', $content);
+    }
+    if (!$known || $depth >= 14) return $content;
+    if ($inline && in_array($tag, ['p','h1','h2','h3','h4','h5','h6','ul','ol','li','table','tr','blockquote','aside','details'], true)) return $content.'<br/>';
+    $attributes = '';
+    if ($tag === 'a') {
+        $href = levelRichUrl($node->getAttribute('href'), $context['base']);
+        $name = $node->getAttribute('name') ?: $node->getAttribute('id');
+        if ($href !== '') $attributes .= ' href="'.$escape($href).'"';
+        if ($name !== '') $attributes .= ' name="'.$escape($name).'"';
+        if ($attributes === '') return $content;
+    }
+    foreach (['ol'=>['start','type'],'li'=>['value','type'],'td'=>['colspan','rowspan','align','valign'],'th'=>['colspan','rowspan','align','valign']][$tag] ?? [] as $attribute) {
+        $value = $node->getAttribute($attribute);
+        if ($value !== '' && preg_match('/^[a-z0-9-]+$/i', $value)) $attributes .= ' '.$attribute.'="'.$escape($value).'"';
+    }
+    foreach (['ol'=>['reversed'],'table'=>['bordered','striped','compact'],'details'=>['open'],'blockquote'=>['expandable']][$tag] ?? [] as $attribute) {
+        if ($node->hasAttribute($attribute)) $attributes .= ' '.$attribute;
+    }
+    if ($tag === 'table' && (int)$node->getAttribute('border') > 0 && !$node->hasAttribute('bordered')) $attributes .= ' bordered';
+    return wrapLevelRichHtml($tag, $attributes, $content);
+}
+
+/** Fetch the current task once and retain its structure for sendRichMessage. */
+function getLevelRichHtml($cookies, $domain, $gameid, $model = null)
+{
+    try {$model = $model ?? encxGameModel($cookies, $domain, $gameid);}
+    catch (Throwable $e) {error_log('Encounter rich level failed: '.$e->getMessage());return false;}
+    $level = encxLevel($model);
+    $task = encxTaskHTML($level);
+    if ($level === null || trim($task) === '') return false;
+    $task = preg_replace('#<\s*/?\s*br\s*/?\s*>#i', '<br>', $task);
+    $task = preg_replace('/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u', '', $task);
+    $document = new DOMDocument('1.0', 'UTF-8');
+    $previous = libxml_use_internal_errors(true);
+    try {$document->loadHTML('<?xml encoding="UTF-8"><html><body>'.$task.'</body></html>', LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);}
+    finally {libxml_clear_errors();libxml_use_internal_errors($previous);}
+    $number = $level['Number'] ?? '?';
+    $total = isset($model['Levels']) && is_array($model['Levels']) ? count($model['Levels']) : 0;
+    $title = 'Уровень '.$number.($total > 0 && $total >= (int)$number ? ' из '.$total : '');
+    $context = ['base'=>(encxUsesHTTP($domain) ? 'http' : 'https').'://'.$domain.'/gameengines/encounter/play/'.(int)$gameid,'media'=>[]];
+    $html = '<h2>'.htmlspecialchars($title, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</h2>';
+    $body = $document->getElementsByTagName('body')->item(0);
+    if (!$body) return false;
+    foreach ($body->childNodes as $child) $html .= renderLevelRichNode($child, $context);
+    $html = strtr($html, $context['media']);
+    if (mb_strlen(html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8'), 'UTF-8') > 32768) throw new LengthException('Текст уровня превышает лимит нового сообщения — 32 768 символов.');
+    if (preg_match_all('#<(?:p|h[1-6]|pre|footer|hr|ul|ol|li|blockquote|aside|table|tr|details|img|video|audio)\b#i', $html) > 500) throw new LengthException('В уровне слишком много блоков для одного расширенного сообщения.');
+    return $html;
+}
+
 function getHints($cookies,$domain,$gameid,$onlyOpen=false,$model=null)
 {
     $hints = Array();

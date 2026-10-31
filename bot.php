@@ -45,6 +45,7 @@ $helptext = "Это бот для игры Encounter
 
 *Игровой процесс*:
 /level - текст текущего уровня; координаты из него уходят отдельной локацией
+/get\_level\_new - уровень с таблицами, списками и медиа в новом формате Telegram
 /hints - подсказки на уровне
 /schema - схема дохода
 /sectors - сводка по секторам уровня
@@ -490,6 +491,30 @@ if(isset($update["message"]))
                         publishCoords($levelText, $chat_id);
                     }
 
+                break;
+                case '/get_level_new':
+                    $reply = ['chat_id'=>$chat_id,
+                        'reply_parameters'=>['message_id'=>$message_id,'allow_sending_without_reply'=>true]];
+                    if (isset($message['message_thread_id'])) $reply['message_thread_id'] = $message['message_thread_id'];
+                    if (!$settings['status']) {
+                        apiRequestJSON('sendMessage', $reply + ['text'=>'Нет активной игры']);
+                        break;
+                    }
+                    try {
+                        $html = getLevelRichHtml($settings['cookies'], $settings['game_domain'], $settings['game_id']);
+                    }
+                    catch (LengthException $e) {
+                        apiRequestJSON('sendMessage', $reply + ['text'=>$e->getMessage()]);
+                        break;
+                    }
+                    if ($html === false) {
+                        apiRequestJSON('sendMessage', $reply + ['text'=>'Не удалось получить текст уровня. Проверьте авторизацию в игре: /game auth']);
+                        break;
+                    }
+                    $parameters = $reply + ['rich_message'=>['html'=>$html,'skip_entity_detection'=>true]];
+                    if (apiRequestJSON('sendRichMessage', $parameters) === false) {
+                        apiRequestJSON('sendMessage', $reply + ['text'=>'Telegram не принял уровень в новом формате. Проверьте HTML задания, доступность медиа и права бота на их отправку.']);
+                    }
                 break;
                 case '/coords':
                     if(publishCoords(implode(' ', $args), $chat_id) === 0)
