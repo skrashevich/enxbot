@@ -65,11 +65,12 @@ namespace {
         $db->exec("INSERT INTO games (chat_id,game_id,game_domain,cookies,last_level_id,status) VALUES
             (-1001,42,'test.invalid','[]',101,1),(-1002,43,'test.invalid','[]',101,1)");
         $db->exec("INSERT INTO admins (admin_username) VALUES ('rootadmin')");
-        foreach (['dr1'=>'dr1','др1'=>'dr1','ДР1'=>'dr1','dR42'=>'dr42','др1йцукен'=>'dr1qwerty','ДР1ФЫВ'=>'dr1ASD','ен1'=>'ен1','друг'=>'друг'] as $input=>$expected) {
+        foreach (['dr1'=>'dr1','др1'=>'dr1','ДР1'=>'dr1','dR42'=>'dr42','др1йцукен'=>'dr1qwerty','ДР1ФЫВ'=>'dr1ASD',
+            '1dr3'=>'1dr3','1др3'=>'1dr3','1ДР3'=>'1dr3','12др3йц'=>'12dr3qw','10DR12'=>'10dr12','ен1'=>'ен1','друг'=>'друг'] as $input=>$expected) {
             drCheck(normalizeDrCode($input)===$expected, 'Wrong keyboard conversion for '.$input);
         }
-        foreach (['dr1','др1','ДР123','dr1abc','др1йц//Комментарий'] as $input) drCheck(isDrCodeMessage($input), 'Valid DR code not recognized');
-        foreach (['dr','др','driver1','друг1','dr1 завтра','это др1',"dr1\ndr2",'en123','123'] as $input) drCheck(!isDrCodeMessage($input), 'Ordinary text was treated as a DR code');
+        foreach (['dr1','др1','ДР123','dr1abc','др1йц//Комментарий','1dr3','1др3','12ДР3йц','1dr3//Комментарий'] as $input) drCheck(isDrCodeMessage($input), 'Valid DR code not recognized');
+        foreach (['dr','др','driver1','друг1','dr1 завтра','это др1',"dr1\ndr2",'en123','123','1dr','1др','x1dr3','1друг3','1dr3 завтра','-1dr3'] as $input) drCheck(!isDrCodeMessage($input), 'Ordinary text was treated as a DR code');
         $buttons = array_column(array_merge(...getSettingsButtons(-1001)), null, 'callback_data');
         $callback = settingsCallbackData('dr_noprefix', -1001);
         drCheck(isset($buttons[$callback]) && str_ends_with($buttons[$callback]['text'],'🚫'), 'DR toggle is absent or enabled by default');
@@ -107,6 +108,36 @@ namespace {
         drCheck(count(Encx\Client::$codes)===$before+1, 'Disabled toggle continued automatic submission');
         drMessage('&др9'); drMessage('&en123');
         drCheck(array_slice(Encx\Client::$codes,-2)===['dr9','en123'], 'Explicit prefix conversion or standard code handling changed');
+
+        // Leading digits are part of the answer, including when DR is Cyrillic.
+        $before=count(Encx\Client::$codes);
+        drMessage('1dr3'); drMessage('1др3');
+        drCheck(count(Encx\Client::$codes)===$before, 'Disabled DR setting submitted a leading-number code');
+        drToggle(7,'rootadmin');
+        drMessage('1dr3'); drMessage('1др3'); drMessage('12ДР3йц//Комментарий др1');
+        drCheck(array_slice(Encx\Client::$codes,$before)===['1dr3','1dr3','12dr3qw'], 'Leading digits or keyboard conversion were lost before transport');
+        $logged=$db->query('SELECT code,comment FROM codeslog ORDER BY id DESC LIMIT 1')->fetch();
+        drCheck($logged['code']==='12dr3qw' && $logged['comment']==='Комментарий др1', 'Leading-number answer or comment was corrupted in log');
+        $calls=array_map(static fn($line)=>json_decode($line,true),file($work.'/telegram.jsonl',FILE_IGNORE_NEW_LINES));
+        $reply=end($calls);
+        drCheck($reply['method']==='sendMessage' && str_contains($reply['params']['text'],'Код принят'), 'Player received no answer for a leading-number code');
+        $before=count(Encx\Client::$codes);
+        drMessage('1др3',-1002); drMessage('1dr3 завтра');
+        drCheck(count(Encx\Client::$codes)===$before, 'Leading-number detection leaked to another chat or ordinary text');
+        set_setting('nocomment','true',-1001);
+        drMessage('1др3');
+        drCheck(count(Encx\Client::$codes)===$before, 'Leading-number code bypassed required comment');
+        drMessage('1др3//Примечание');
+        drCheck(count(Encx\Client::$codes)===$before+1 && end(Encx\Client::$codes)==='1dr3', 'Leading-number code with a comment was lost');
+        $db->exec('UPDATE games SET status=2 WHERE chat_id=-1001');
+        drMessage('1др3//Только лог');
+        $logged=$db->query('SELECT code,comment FROM codeslog ORDER BY id DESC LIMIT 1')->fetch();
+        drCheck(count(Encx\Client::$codes)===$before+1 && $logged['code']==='1dr3' && $logged['comment']==='Только лог', 'Leading-number code bypassed record-only mode');
+        $db->exec('UPDATE games SET status=1 WHERE chat_id=-1001');
+        set_setting('nocomment','false',-1001);
+        drToggle(7,'rootadmin');
+        drMessage(';1др3'); drMessage('$12ДР3йц');
+        drCheck(array_slice(Encx\Client::$codes,-2)===['1dr3','12dr3qw'], 'Explicit leading-number codes were not normalized while automatic mode was off');
         echo "DR code regression checks passed: $checks\n";
     } finally {
         proc_terminate($server); proc_close($server);
