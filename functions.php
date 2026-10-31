@@ -431,14 +431,31 @@ function sendCode($cookies,$domain,$gameid,$code)
 function isDrCodeMessage($text)
 {
     $code = trim(explode('//', (string)$text, 2)[0]);
-    return preg_match('/\A[0-9]*(?:dr|др)[0-9][a-zа-яё0-9_-]*\z/iu', $code) === 1;
+    return preg_match('/\A[a-zа-яё0-9_-]+\z/iu', $code) === 1 && drCodeParts($code) !== false;
 }
 
-/** Unify DR/ДР and fix Russian keyboard letters in the code, not its comment. */
+/** Split a numeric D/R identifier from its optional suffix without reordering it. */
+function drCodeParts($code)
+{
+    if (preg_match('/\A[0-9drдр]+\z/iu', $code)) {
+        $head = $code;
+        $tail = '';
+    } elseif (preg_match('/\A([0-9drдр]*[0-9])(.*)\z/isu', $code, $parts)) {
+        $head = $parts[1];
+        $tail = $parts[2];
+    } else {
+        return false;
+    }
+    $head = strtr(mb_strtolower($head), ['д'=>'d','р'=>'r']);
+    if (!str_contains($head, 'd') || !str_contains($head, 'r') || !preg_match('/[0-9]/', $head)) return false;
+    return [$head, $tail];
+}
+
+/** Translate D/R letters in place and fix the suffix's keyboard layout. */
 function normalizeDrCode($code)
 {
-    $trimmed = trim((string)$code);
-    if (!preg_match('/\A([0-9]*)(?:dr|др)(?=[0-9])/iu', $trimmed, $prefix)) return $code;
+    $parts = drCodeParts(trim((string)$code));
+    if ($parts === false) return $code;
     static $layout = null;
     if ($layout === null) {
         $lower = preg_split('//u', 'ёйцукенгшщзхъфывапролджэячсмитьбю', -1, PREG_SPLIT_NO_EMPTY);
@@ -446,7 +463,7 @@ function normalizeDrCode($code)
         $layout = array_combine($lower, str_split('`qwertyuiop[]asdfghjkl;\'zxcvbnm,.'))
             + array_combine($upper, str_split('~QWERTYUIOP{}ASDFGHJKL:"ZXCVBNM<>'));
     }
-    return $prefix[1].'dr'.strtr(substr($trimmed, strlen($prefix[0])), $layout);
+    return $parts[0].strtr($parts[1], $layout);
 }
 
 function parseCode($text, $chat_id, $sender, $location=Array())

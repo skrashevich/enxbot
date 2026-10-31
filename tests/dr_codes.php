@@ -66,11 +66,14 @@ namespace {
             (-1001,42,'test.invalid','[]',101,1),(-1002,43,'test.invalid','[]',101,1)");
         $db->exec("INSERT INTO admins (admin_username) VALUES ('rootadmin')");
         foreach (['dr1'=>'dr1','др1'=>'dr1','ДР1'=>'dr1','dR42'=>'dr42','др1йцукен'=>'dr1qwerty','ДР1ФЫВ'=>'dr1ASD',
-            '1dr3'=>'1dr3','1др3'=>'1dr3','1ДР3'=>'1dr3','12др3йц'=>'12dr3qw','10DR12'=>'10dr12','ен1'=>'ен1','друг'=>'друг'] as $input=>$expected) {
+            '1dr3'=>'1dr3','1др3'=>'1dr3','1ДР3'=>'1dr3','12др3йц'=>'12dr3qw','10DR12'=>'10dr12',
+            '1рд3'=>'1rd3','рд13'=>'rd13','13др'=>'13dr','13РД'=>'13rd','д1р3'=>'d1r3','р1д3'=>'r1d3',
+            '3д1р'=>'3d1r','12Р3Д4йц'=>'12r3d4qw','dr1rabc'=>'dr1rabc','ен1'=>'ен1','друг'=>'друг'] as $input=>$expected) {
             drCheck(normalizeDrCode($input)===$expected, 'Wrong keyboard conversion for '.$input);
         }
-        foreach (['dr1','др1','ДР123','dr1abc','др1йц//Комментарий','1dr3','1др3','12ДР3йц','1dr3//Комментарий'] as $input) drCheck(isDrCodeMessage($input), 'Valid DR code not recognized');
-        foreach (['dr','др','driver1','друг1','dr1 завтра','это др1',"dr1\ndr2",'en123','123','1dr','1др','x1dr3','1друг3','1dr3 завтра','-1dr3'] as $input) drCheck(!isDrCodeMessage($input), 'Ordinary text was treated as a DR code');
+        foreach (['dr1','др1','ДР123','dr1abc','др1йц//Комментарий','1dr3','1др3','12ДР3йц','1dr3//Комментарий',
+            '1рд3','1РД3','рд13','13др','13РД','д1р3','р1д3','3d1r','1dr','1др','13rd','12Р3Д4йц//Комментарий'] as $input) drCheck(isDrCodeMessage($input), 'Valid DR code not recognized: '.$input);
+        foreach (['dr','др','rd','рд','driver1','друг1','dr1 завтра','это др1',"dr1\ndr2",'en123','123','x1dr3','1друг3','1dr3 завтра','-1dr3','1рд3 завтра','д13','р13'] as $input) drCheck(!isDrCodeMessage($input), 'Ordinary text was treated as a DR code');
         $buttons = array_column(array_merge(...getSettingsButtons(-1001)), null, 'callback_data');
         $callback = settingsCallbackData('dr_noprefix', -1001);
         drCheck(isset($buttons[$callback]) && str_ends_with($buttons[$callback]['text'],'🚫'), 'DR toggle is absent or enabled by default');
@@ -138,6 +141,37 @@ namespace {
         drToggle(7,'rootadmin');
         drMessage(';1др3'); drMessage('$12ДР3йц');
         drCheck(array_slice(Encx\Client::$codes,-2)===['1dr3','12dr3qw'], 'Explicit leading-number codes were not normalized while automatic mode was off');
+
+        $before=count(Encx\Client::$codes);
+        drMessage('1рд3'); drMessage('д1р3'); drMessage('13др');
+        drCheck(count(Encx\Client::$codes)===$before, 'Disabled setting submitted reordered codes');
+        drToggle(7,'rootadmin');
+        $variants=['1rd3'=>'1rd3','1рд3'=>'1rd3','рд13'=>'rd13','13др'=>'13dr','13rd'=>'13rd',
+            'д1р3'=>'d1r3','р1д3'=>'r1d3','3д1р'=>'3d1r','12Р3Д4йц'=>'12r3d4qw'];
+        foreach ($variants as $input=>$expected) {
+            $before=count(Encx\Client::$codes);
+            drMessage($input.'//Порядок рд');
+            drCheck(count(Encx\Client::$codes)===$before+1 && end(Encx\Client::$codes)===$expected, 'Code order changed before transport: '.$input);
+            $logged=$db->query('SELECT code,comment FROM codeslog ORDER BY id DESC LIMIT 1')->fetch();
+            drCheck($logged['code']===$expected && $logged['comment']==='Порядок рд', 'Code order or comment changed in log');
+        }
+        $before=count(Encx\Client::$codes);
+        drMessage('1рд3',-1002); drMessage('1рд3 завтра');
+        drCheck(count(Encx\Client::$codes)===$before, 'Reordered codes bypassed chat isolation or text filtering');
+        set_setting('nocomment','true',-1001);
+        drMessage('1рд3');
+        drCheck(count(Encx\Client::$codes)===$before, 'Reordered code bypassed required comment');
+        drMessage('1рд3//Примечание');
+        drCheck(end(Encx\Client::$codes)==='1rd3' && count(Encx\Client::$codes)===$before+1, 'Reordered code with comment was lost');
+        $db->exec('UPDATE games SET status=2 WHERE chat_id=-1001');
+        drMessage('1рд3//Только лог');
+        $logged=$db->query('SELECT code,comment FROM codeslog ORDER BY id DESC LIMIT 1')->fetch();
+        drCheck(count(Encx\Client::$codes)===$before+1 && $logged['code']==='1rd3' && $logged['comment']==='Только лог', 'Reordered code bypassed record-only mode');
+        $db->exec('UPDATE games SET status=1 WHERE chat_id=-1001');
+        set_setting('nocomment','false',-1001);
+        drToggle(7,'rootadmin');
+        drMessage(';1рд3'); drMessage('&д1р3');
+        drCheck(array_slice(Encx\Client::$codes,-2)===['1rd3','d1r3'], 'Explicit reordered codes were lost with automatic mode disabled');
         echo "DR code regression checks passed: $checks\n";
     } finally {
         proc_terminate($server); proc_close($server);
