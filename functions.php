@@ -414,6 +414,19 @@ function formatCodeReply($text)
     $html = htmlspecialchars((string)$text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     $html = preg_replace_callback('/\AКод (принят|не принят)(?=[ (\n]|$)/u',
         static fn($match) => ($match[1] === 'принят' ? '✅ ' : '❌ ').$match[0], $html);
+    $lines = explode("\n", $html);
+    $sectorList = false;
+    foreach ($lines as &$line) {
+        if (str_starts_with($line, 'Закрыт сектор: ')) {
+            $line = 'Закрыт сектор: <b>'.substr($line, strlen('Закрыт сектор: ')).'</b>';
+        } elseif ($sectorList && str_starts_with($line, '• ')) {
+            $line = '• <b>'.substr($line, strlen('• ')).'</b>';
+            continue;
+        }
+        $sectorList = $line === 'Закрыты секторы:';
+    }
+    unset($line);
+    $html = implode("\n", $lines);
     return preg_replace('/(^|\n)(Осталось до АП: )([0-9]+)(?=\.?($|\n))/u', '$1$2<b>$3</b>', $html);
 }
 

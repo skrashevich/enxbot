@@ -63,7 +63,7 @@ try {
     codeCheck($finished['levelid'] === -1 && $finished['result'] === 'Игра завершена', 'A confirmed finish was not preserved');
     $single = sendCode($session, $address, 424243, 'single-sector-code');
     codeCheck($single['result'] === "Код принят (2/4)\nЗакрыт сектор: 2. А_Б * [вход] <арка>\nВсего секторов: 4.\nОсталось до АП: 2.", 'Accepted code did not identify the sector and remaining progress');
-    codeCheck(formatCodeReply($single['result']) === "✅ Код принят (2/4)\nЗакрыт сектор: 2. А_Б * [вход] &lt;арка&gt;\nВсего секторов: 4.\nОсталось до АП: <b>2</b>.", 'Telegram result lost status, bold progress, or safe sector name');
+    codeCheck(formatCodeReply($single['result']) === "✅ Код принят (2/4)\nЗакрыт сектор: <b>2. А_Б * [вход] &lt;арка&gt;</b>\nВсего секторов: 4.\nОсталось до АП: <b>2</b>.", 'Telegram result lost status, bold progress, or safe sector name');
     $multiple = sendCode($session, $address, 424243, 'multiple-sector-code');
     codeCheck($multiple['result'] === "Код принят (3/4)\nЗакрыты секторы:\n• 1. 1+\n• 2. А_Б * [вход] <арка>\nВсего секторов: 4.\nОсталось до АП: 1.", 'Multiple closed sectors or stable IDs were lost after reordering');
     $unnamed = sendCode($session, $address, 424243, 'unnamed-sector-code');
