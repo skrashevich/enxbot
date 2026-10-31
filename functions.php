@@ -95,6 +95,7 @@ function renderLevelRichNode($node, &$context, $inline = false, $depth = 0)
     if ($node instanceof DOMText) return $escape($node->nodeValue);
     if (!($node instanceof DOMElement)) return '';
     $tag = strtolower($node->tagName);
+    if ($node->hasAttribute('hidden') || preg_match('/(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)\s*(?:!important\s*)?(?:;|$)/i', $node->getAttribute('style'))) return '';
     if (in_array($tag, ['script','style','head','title','form','button','object','embed','source','base','meta','link'], true)) return '';
     if ($tag === 'br') return '<br/>';
     if ($tag === 'hr') return $inline ? '<br/>' : '<hr/>';
@@ -206,13 +207,38 @@ function renderLevelTask($cookies, $domain, $gameid, $levelId)
     return $snapshot;
 }
 
-/** Prepare rendered HTML and uploaded canvas/frame snapshots for Rich Messages. */
+/** Select the browser only for executable markup or graphics that need a snapshot. */
+function levelTaskNeedsBrowser($task)
+{
+    if (trim($task) === '') return true;
+    $document = new DOMDocument('1.0', 'UTF-8');
+    $previous = libxml_use_internal_errors(true);
+    try {$document->loadHTML('<?xml encoding="UTF-8"><html><body>'.$task.'</body></html>', LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);}
+    finally {libxml_clear_errors();libxml_use_internal_errors($previous);}
+    foreach ($document->getElementsByTagName('*') as $node) {
+        $tag = strtolower($node->tagName);
+        if (in_array($tag, ['script','canvas','svg','iframe'], true)) return true;
+        if ($tag === 'img' && preg_match('/^\s*(?:data|blob):/i', $node->getAttribute('src'))) return true;
+        foreach ($node->attributes as $attribute) {
+            if (preg_match('/^on[a-z]+$/i', $attribute->name) && trim($attribute->value) !== '') return true;
+            if (in_array(strtolower($attribute->name), ['href','src','action','formaction','xlink:href'], true)
+                && str_starts_with(strtolower(preg_replace('/[\x00-\x20]/', '', $attribute->value)), 'javascript:')) return true;
+        }
+    }
+    return false;
+}
+
+/** Use static task HTML directly; render executable tasks before Rich Messages. */
 function getLevelRichMessage($cookies, $domain, $gameid)
 {
     try {$model = encxGameModel($cookies, $domain, $gameid);}
     catch (Throwable $e) {return false;}
     $level = encxLevel($model);
     if ($level === null) return false;
+    if (!levelTaskNeedsBrowser(encxTaskHTML($level))) {
+        $html = getLevelRichHtml($cookies, $domain, $gameid, $model);
+        return $html === false ? false : ['message'=>['html'=>$html,'skip_entity_detection'=>true],'files'=>[]];
+    }
     $snapshot = renderLevelTask($cookies, $domain, $gameid, (int)($level['LevelId'] ?? 0));
     $model['Level']['Task'] = ['TaskText'=>$snapshot['html']];
     $html = getLevelRichHtml($cookies, $domain, $gameid, $model);

@@ -37,6 +37,7 @@ namespace {
     file_put_contents($work.'/renderer', '#!'.PHP_BINARY."\n". <<<'PHP'
 <?php
 $payload=json_decode(stream_get_contents(STDIN), true);
+file_put_contents(__DIR__.'/render-calls.log',"render\n",FILE_APPEND);
 file_put_contents(__DIR__.'/render-request.json',json_encode(['args'=>array_slice($argv,1),'payload'=>$payload]));
 if(is_file(__DIR__.'/render-fail')) exit((int)file_get_contents(__DIR__.'/render-fail'));
 echo file_get_contents(is_file(__DIR__.'/render-extra.json')?__DIR__.'/render-extra.json':__DIR__.'/render-result.json');
@@ -67,6 +68,10 @@ PHP
         global $work;
         return array_map(static fn($line)=>json_decode($line, true), file($work.'/telegram.jsonl', FILE_IGNORE_NEW_LINES));
     }
+    function richRenderCalls() {
+        global $work;
+        return is_file($work.'/render-calls.log') ? count(file($work.'/render-calls.log')) : 0;
+    }
     function richCommand($chat=-1001, $command='/get_level_new') {
         handleUpdate(['message'=>['message_id'=>71,'message_thread_id'=>92,'chat'=>['id'=>$chat,'title'=>'Test'],
             'from'=>['id'=>8,'username'=>'player','first_name'=>'Игрок'],'text'=>$command]]);
@@ -79,6 +84,14 @@ PHP
         richCheck($attempt<30, 'Telegram stub did not start');
         chdir($work);
         require 'bot.php';
+        foreach ([
+            ['<p>Статика</p>',false],['<!-- <script>comment</script> --><p>Статика</p>',false],
+            ['<pre>&lt;script&gt;code example&lt;/script&gt;</pre>',false],
+            ['<SCRIPT src="/task.js"></SCRIPT>',true],['<script>document.write("task")</script>',true],
+            ['<a onClick="showTask()">Открыть</a>',true],['<a href="java&#x73;cript:showTask()">Открыть</a>',true],
+            ['<canvas></canvas>',true],['<svg></svg>',true],['<iframe src="/task"></iframe>',true],
+            ['<img src="data:image/png;base64,aA==">',true],['<img src="blob:task">',true],['',true],
+        ] as [$markup,$expected]) richCheck(levelTaskNeedsBrowser($markup)===$expected, 'Wrong render mode for '.$markup);
         $fixture = '<h1>Задание &amp; цель 🧭</h1><table border="1"><tbody><tr><th>Метка</th><th>Место</th></tr>'
             .'<tr><td><div><b>1+</b></div></td><td><img src="/files/map.jpg" alt="Карта"></td></tr></tbody></table>'
             .'<ol start="3"><li>Первый<ul><li>Вложенный</li></ul></li><li>Второй</li></ol>'
@@ -127,9 +140,20 @@ PHP
         $calls=richCalls(); $last=end($calls);
         richCheck($last['method']==='sendRichMessage' && $last['params']['chat_id']===-1002, 'HQ command did not use bound game');
         richCheck(count(Encx\Client::$requests)===2 && end(Encx\Client::$requests)===[42,'[]'], 'HQ fetched wrong game');
+        // Static tasks must work even when Chromium is unavailable/failing.
+        $beforeRenders=richRenderCalls();
+        $beforeReads=count(Encx\Client::$requests);
+        file_put_contents($work.'/render-fail','1');
+        Encx\Client::$model=richModel('<p>Быстрый текст</p><p hidden>hidden text</p><p style="display:none">hidden style</p><!-- <script>comment</script> -->');
+        richCommand(); $calls=richCalls(); $last=end($calls);
+        richCheck($last['method']==='sendRichMessage' && str_contains($last['params']['rich_message']['html'],'Быстрый текст'), 'Static task did not use fast delivery');
+        richCheck(richRenderCalls()===$beforeRenders && count(Encx\Client::$requests)===$beforeReads+1, 'Fast mode launched Chromium or fetched the model twice');
+        richCheck(!str_contains($last['params']['rich_message']['html'],'hidden'), 'Fast mode exposed hidden task text');
+        unlink($work.'/render-fail');
+        $beforeReads=count(Encx\Client::$requests);
         $db->exec('UPDATE games SET status=0 WHERE chat_id=-1001');
         richCommand(); $calls=richCalls(); $last=end($calls);
-        richCheck(count(Encx\Client::$requests)===2 && $last['method']==='sendMessage' && $last['params']['text']==='Нет активной игры', 'Inactive game was fetched');
+        richCheck(count(Encx\Client::$requests)===$beforeReads && $last['method']==='sendMessage' && $last['params']['text']==='Нет активной игры', 'Inactive game was fetched');
         $db->exec('UPDATE games SET status=1 WHERE chat_id=-1001');
         Encx\Client::$model=null;
         richCommand(); $calls=richCalls(); $last=end($calls);
@@ -145,6 +169,7 @@ PHP
         richCheck(str_contains($tail[1]['params']['text'],'Telegram не принял'), 'Send failure not explained');
         richCheck($tail[1]['params']['message_thread_id']===92 && $tail[1]['params']['reply_parameters']['message_id']===71, 'Error escaped the original topic');
         unlink($work.'/.stub_fail_mode');
+        Encx\Client::$model=richModel('<p>JS task</p><script>loadTask()</script>');
         file_put_contents($work.'/render-fail','2');
         richCommand(); $calls=richCalls(); $last=end($calls);
         richCheck($last['method']==='sendMessage' && str_contains($last['params']['text'],'/game auth'), 'Browser auth failure sent a login page');
