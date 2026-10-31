@@ -14,6 +14,8 @@ namespace Encx {
         public function getGameModel($id) {
             self::$requests[] = [$id, self::$cookies];
             if (self::$model === null) throw new \RuntimeException('Session expired');
+            if (getenv('ENXBOT_RICH_STUB_RESULT')) file_put_contents(getenv('ENXBOT_RICH_STUB_RESULT'),
+                json_encode(['html'=>\encxTaskHTML(\encxLevel(self::$model)),'images'=>[]]));
             return json_encode(self::$model);
         }
     }
@@ -30,7 +32,18 @@ namespace {
     fclose($socket);
     file_put_contents($work.'/config.php', '<?php $sqlite_path=__DIR__."/state.sqlite";'
         .'define("API_URL",'.var_export('http://'.$address.'/tg/', true).');'
-        .'define("ENCRYPTION_KEY","test-key");define("BOT_USERNAME","testbot");define("ADMIN_USERNAME","admin");');
+        .'define("ENCRYPTION_KEY","test-key");define("BOT_USERNAME","testbot");define("ADMIN_USERNAME","admin");'
+        .'define("PHANTOMJS",__DIR__."/renderer");');
+    file_put_contents($work.'/renderer', '#!'.PHP_BINARY."\n". <<<'PHP'
+<?php
+$payload=json_decode(stream_get_contents(STDIN), true);
+file_put_contents(__DIR__.'/render-request.json',json_encode(['args'=>array_slice($argv,1),'payload'=>$payload]));
+if(is_file(__DIR__.'/render-fail')) exit((int)file_get_contents(__DIR__.'/render-fail'));
+echo file_get_contents(is_file(__DIR__.'/render-extra.json')?__DIR__.'/render-extra.json':__DIR__.'/render-result.json');
+PHP
+    );
+    chmod($work.'/renderer',0700);
+    putenv('ENXBOT_RICH_STUB_RESULT='.$work.'/render-result.json');
     // Copy the stub so its failure flag is isolated from parallel tests.
     mkdir($work.'/tests');
     copy(__DIR__.'/stub_server.php', $work.'/tests/stub_server.php');
@@ -107,6 +120,9 @@ namespace {
         richCheck(!isset($params['parse_mode']) && !isset($params['text']), 'Legacy HTML sendMessage used');
         richCheck($params['chat_id']===-1001 && $params['message_thread_id']===92 && $params['reply_parameters']['message_id']===71, 'Reply or topic was lost');
         richCheck(Encx\Client::$requests===[[42,'[]']], 'Wrong game, missing saved session, or repeated fetch');
+        $render=json_decode(file_get_contents($work.'/render-request.json'),true);
+        richCheck($render['args']===['--rich-html'] && $render['payload']['url']==='https://test.invalid/gameengines/encounter/play/42?lang=ru', 'Renderer received wrong URL or credentials in arguments');
+        richCheck($render['payload']['cookies']===[], 'Saved session was not passed through stdin');
         richCommand(-1002);
         $calls=richCalls(); $last=end($calls);
         richCheck($last['method']==='sendRichMessage' && $last['params']['chat_id']===-1002, 'HQ command did not use bound game');
@@ -128,6 +144,29 @@ namespace {
         richCheck(array_column($tail,'method')===['sendRichMessage','sendMessage'], 'Rejected send was repeated or error missing');
         richCheck(str_contains($tail[1]['params']['text'],'Telegram не принял'), 'Send failure not explained');
         richCheck($tail[1]['params']['message_thread_id']===92 && $tail[1]['params']['reply_parameters']['message_id']===71, 'Error escaped the original topic');
+        unlink($work.'/.stub_fail_mode');
+        file_put_contents($work.'/render-fail','2');
+        richCommand(); $calls=richCalls(); $last=end($calls);
+        richCheck($last['method']==='sendMessage' && str_contains($last['params']['text'],'/game auth'), 'Browser auth failure sent a login page');
+        file_put_contents($work.'/render-fail','1');
+        richCommand(); $calls=richCalls(); $last=end($calls);
+        richCheck($last['method']==='sendMessage' && str_contains($last['params']['text'],'JavaScript'), 'Browser failure silently fell back to incomplete HTML');
+        unlink($work.'/render-fail');
+        $png=base64_encode("\x89PNG\r\n\x1a\nfixture");
+        file_put_contents($work.'/render-extra.json',json_encode(['html'=>'<p>JS ready</p><img src="https://enxbot.invalid/snapshot/render0.png">',
+            'images'=>[['id'=>'render0','png'=>$png]]]));
+        $tempBefore=glob(sys_get_temp_dir().'/enxbot-rich-*');
+        richCommand(); $calls=richCalls(); $last=end($calls);
+        richCheck($last['method']==='sendRichMessage' && is_string($last['params']['rich_message']), 'Drawn image was not uploaded via multipart');
+        $rich=json_decode($last['params']['rich_message'],true);
+        richCheck(str_contains($rich['html'],'tg://photo?id=render0') && $rich['media'][0]['media']['media']==='attach://render0', 'Canvas attachment was not referenced by Rich HTML');
+        richCheck(($last['params']['uploads']['render0']['png']??false)===true, 'Renderer image upload is missing');
+        richCheck((int)$last['params']['message_thread_id']===92 && json_decode($last['params']['reply_parameters'],true)['message_id']===71, 'Multipart image lost topic or reply');
+        richCheck(glob(sys_get_temp_dir().'/enxbot-rich-*')===$tempBefore, 'Rendered image temporary files leaked');
+        file_put_contents($work.'/.stub_fail_mode','rich400');
+        richCommand(); $calls=richCalls(); $last=end($calls);
+        richCheck($last['method']==='sendMessage' && str_contains($last['params']['text'],'Telegram не принял'), 'Multipart rejection did not reach player');
+        richCheck(glob(sys_get_temp_dir().'/enxbot-rich-*')===$tempBefore, 'Rejected image upload left temporary files');
         echo "Rich level regression checks passed: $checks\n";
     } finally {
         proc_terminate($server); proc_close($server);

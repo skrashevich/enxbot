@@ -501,20 +501,20 @@ if(isset($update["message"]))
                         apiRequestJSON('sendMessage', $reply + ['text'=>'Нет активной игры']);
                         break;
                     }
+                    $delivery = null;
                     try {
-                        $html = getLevelRichHtml($settings['cookies'], $settings['game_domain'], $settings['game_id']);
-                    }
-                    catch (LengthException $e) {
+                        $delivery = getLevelRichMessage($settings['cookies'], $settings['game_domain'], $settings['game_id']);
+                        if ($delivery === false) {
+                            apiRequestJSON('sendMessage', $reply + ['text'=>'Не удалось получить текст уровня. Проверьте авторизацию в игре: /game auth']);
+                            break;
+                        }
+                        if (sendLevelRichMessage($reply + ['rich_message'=>$delivery['message']], $delivery['files']) === false) {
+                            apiRequestJSON('sendMessage', $reply + ['text'=>'Telegram не принял уровень в новом формате. Проверьте HTML задания, доступность медиа и права бота на их отправку.']);
+                        }
+                    } catch (LengthException | RichLevelRenderException $e) {
                         apiRequestJSON('sendMessage', $reply + ['text'=>$e->getMessage()]);
-                        break;
-                    }
-                    if ($html === false) {
-                        apiRequestJSON('sendMessage', $reply + ['text'=>'Не удалось получить текст уровня. Проверьте авторизацию в игре: /game auth']);
-                        break;
-                    }
-                    $parameters = $reply + ['rich_message'=>['html'=>$html,'skip_entity_detection'=>true]];
-                    if (apiRequestJSON('sendRichMessage', $parameters) === false) {
-                        apiRequestJSON('sendMessage', $reply + ['text'=>'Telegram не принял уровень в новом формате. Проверьте HTML задания, доступность медиа и права бота на их отправку.']);
+                    } finally {
+                        foreach (($delivery['files'] ?? []) as $file) unlink($file);
                     }
                 break;
                 case '/coords':

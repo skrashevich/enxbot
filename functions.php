@@ -3,6 +3,7 @@ require_once 'Html2Text.php';
 require_once __DIR__.'/encounter.php';
 
 class TelegramUnauthorizedException extends RuntimeException {}
+class RichLevelRenderException extends RuntimeException {}
 
 function auth($domain,$login,$pass)
 {
@@ -177,6 +178,89 @@ function getLevelRichHtml($cookies, $domain, $gameid, $model = null)
     if (mb_strlen(html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8'), 'UTF-8') > 32768) throw new LengthException('Текст уровня превышает лимит нового сообщения — 32 768 символов.');
     if (preg_match_all('#<(?:p|h[1-6]|pre|footer|hr|ul|ol|li|blockquote|aside|table|tr|details|img|video|audio)\b#i', $html) > 500) throw new LengthException('В уровне слишком много блоков для одного расширенного сообщения.');
     return $html;
+}
+
+/** Render in the authenticated browser; session data travels through stdin only. */
+function renderLevelTask($cookies, $domain, $gameid, $levelId)
+{
+    if (!defined('PHANTOMJS') || !is_executable(PHANTOMJS)) {
+        throw new RichLevelRenderException('Не найден Chromium-рендерер задания.');
+    }
+    $url = (encxUsesHTTP($domain) ? 'http' : 'https').'://'.$domain.'/gameengines/encounter/play/'.(int)$gameid.'?lang=ru';
+    $process = proc_open([PHANTOMJS, '--rich-html'], [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']], $pipes);
+    if (!is_resource($process)) throw new RichLevelRenderException('Не удалось запустить рендерер задания.');
+    fwrite($pipes[0], json_encode(['url'=>$url,'level_id'=>$levelId,
+        'cookies'=>json_decode(encxNormalizeCookies($cookies), true) ?: []], JSON_THROW_ON_ERROR));
+    fclose($pipes[0]);
+    $output = stream_get_contents($pipes[1]);
+    fclose($pipes[1]);
+    stream_get_contents($pipes[2]); // WebDriver output must never expose session data.
+    fclose($pipes[2]);
+    $status = proc_close($process);
+    if ($status === 2) throw new RichLevelRenderException('Сессия Encounter недействительна. Выполните /game auth');
+    if ($status !== 0) throw new RichLevelRenderException('Не удалось отрисовать задание после JavaScript. Страница не загрузилась или уровень изменился; повторите команду.');
+    $snapshot = json_decode($output, true);
+    if (!is_array($snapshot) || !is_string($snapshot['html'] ?? null) || !is_array($snapshot['images'] ?? null)) {
+        throw new RichLevelRenderException('Рендерер вернул некорректное задание.');
+    }
+    return $snapshot;
+}
+
+/** Prepare rendered HTML and uploaded canvas/frame snapshots for Rich Messages. */
+function getLevelRichMessage($cookies, $domain, $gameid)
+{
+    try {$model = encxGameModel($cookies, $domain, $gameid);}
+    catch (Throwable $e) {return false;}
+    $level = encxLevel($model);
+    if ($level === null) return false;
+    $snapshot = renderLevelTask($cookies, $domain, $gameid, (int)($level['LevelId'] ?? 0));
+    $model['Level']['Task'] = ['TaskText'=>$snapshot['html']];
+    $html = getLevelRichHtml($cookies, $domain, $gameid, $model);
+    if ($html === false) throw new RichLevelRenderException('После выполнения JavaScript текст задания пуст.');
+    $files = [];
+    $media = [];
+    $bytes = 0;
+    try {
+        if (count($snapshot['images']) > 10) throw new RichLevelRenderException('Слишком много изображений в JS-задании.');
+        foreach ($snapshot['images'] as $image) {
+            if (!is_array($image) || !is_string($image['id'] ?? null) || !is_string($image['png'] ?? null)) {
+                throw new RichLevelRenderException('Некорректная графика JS-задания.');
+            }
+            $id = $image['id'] ?? '';
+            $png = base64_decode($image['png'] ?? '', true);
+            $bytes += strlen($png ?: '');
+            if (isset($files[$id]) || !preg_match('/\Arender[0-9]+\z/', $id) || $png === false || !str_starts_with($png, "\x89PNG\r\n\x1a\n") || $bytes > 8*1024*1024) {
+                throw new RichLevelRenderException('Некорректная или слишком большая графика JS-задания.');
+            }
+            $placeholder = 'https://enxbot.invalid/snapshot/'.$id.'.png';
+            if (!str_contains($html, $placeholder)) continue;
+            // Tables allow inline content only: show the corresponding snapshot below.
+            if (!str_contains($html, 'src="'.$placeholder.'"')) $html .= '<img src="'.$placeholder.'"/>';
+            $path = tempnam(sys_get_temp_dir(), 'enxbot-rich-');
+            if ($path === false) throw new RichLevelRenderException('Не удалось сохранить графику задания.');
+            $files[$id] = $path;
+            if (file_put_contents($path, $png) === false) throw new RichLevelRenderException('Не удалось сохранить графику задания.');
+            $media[] = ['id'=>$id,'media'=>['type'=>'photo','media'=>'attach://'.$id]];
+            $html = str_replace($placeholder, 'tg://photo?id='.$id, $html);
+        }
+        if (preg_match_all('#<(?:p|h[1-6]|pre|footer|hr|ul|ol|li|blockquote|aside|table|tr|details|img|video|audio)\b#i', $html) > 500) {
+            throw new LengthException('В уровне слишком много блоков для одного расширенного сообщения.');
+        }
+        $message = ['html'=>$html,'skip_entity_detection'=>true];
+        if ($media) $message['media'] = $media;
+        return ['message'=>$message,'files'=>$files];
+    } catch (Throwable $e) {
+        foreach ($files as $file) unlink($file);
+        throw $e;
+    }
+}
+
+function sendLevelRichMessage($parameters, $files)
+{
+    if (!$files) return apiRequestJSON('sendRichMessage', $parameters);
+    foreach ($parameters as $name=>$value) if (is_array($value)) $parameters[$name] = json_encode($value, JSON_THROW_ON_ERROR);
+    foreach ($files as $name=>$path) $parameters[$name] = new CURLFile($path, 'image/png', $name.'.png');
+    return apiRequestPOST('sendRichMessage', $parameters);
 }
 
 function getHints($cookies,$domain,$gameid,$onlyOpen=false,$model=null)

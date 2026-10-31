@@ -164,6 +164,9 @@ function logTelegramCall($method, $body)
             $params[$key] = $value;
         }
     }
+    foreach ($_FILES as $name=>$file) {
+        $params['uploads'][$name] = ['png'=>file_get_contents($file['tmp_name'], false, null, 0, 8)==="\x89PNG\r\n\x1a\n"];
+    }
 
     $entry = json_encode(
         array('method' => $method, 'params' => $params),

@@ -85,6 +85,11 @@ fi
 
 echo "== Скриншоты: HTTPS и ошибки рендерера =="
 php "$TESTS/screenshot.php" || exit 1
+if command -v chromium >/dev/null && command -v chromedriver >/dev/null; then
+    python3 "$TESTS/screenshot.py" || exit 1
+else
+    echo "  Chromium/ChromeDriver отсутствуют: браузерные проверки JS и скриншотов пропущены"
+fi
 
 echo "== Запоминание движка между клиентами и процессами =="
 php "$TESTS/bindings_version.php" || exit 1
