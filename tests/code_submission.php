@@ -45,10 +45,12 @@ try {
     codeCheck($requests[0]['level_id'] === 101 && $requests[0]['level_number'] === 7, 'The wrong level was submitted');
     $failed = sendCode($session, $address, 424242, 'bad-response');
     codeCheck(str_contains($failed['result'], 'не подтвердил'), 'An uncertain submission produced no useful message');
+    codeCheck(!str_contains(formatCodeReply($failed['result']), '✅') && !str_contains(formatCodeReply($failed['result']), '❌'), 'Unconfirmed submission received a definitive status icon');
     codeCheck($failed['levelid'] === 101, 'A transport failure lost the known level');
     codeCheck(count(codeRequests($log)) === 2, 'An uncertain submission was retried automatically');
     $wrong = sendCode($session, $address, 424242, 'wrong-test-code');
     codeCheck(str_contains($wrong['result'], 'Код не принят'), 'A rejected code was reported as accepted');
+    codeCheck(str_starts_with(formatCodeReply($wrong['result']), '❌ Код не принят'), 'Rejected code has no cross icon');
     $lost = sendCode($session, $address, 424242, 'session-lost');
     codeCheck($lost['levelid'] === 101 && str_contains($lost['result'], '/game auth'), 'An authentication error after submission lost the current level');
     $last = sendCode($session, $address, 424242, 'finish-test-code');
@@ -61,6 +63,7 @@ try {
     codeCheck($finished['levelid'] === -1 && $finished['result'] === 'Игра завершена', 'A confirmed finish was not preserved');
     $single = sendCode($session, $address, 424243, 'single-sector-code');
     codeCheck($single['result'] === "Код принят (2/4)\nЗакрыт сектор: 2. А_Б * [вход] <арка>\nВсего секторов: 4.\nОсталось до АП: 2.", 'Accepted code did not identify the sector and remaining progress');
+    codeCheck(formatCodeReply($single['result']) === "✅ Код принят (2/4)\nЗакрыт сектор: 2. А_Б * [вход] &lt;арка&gt;\nВсего секторов: 4.\nОсталось до АП: <b>2</b>.", 'Telegram result lost status, bold progress, or safe sector name');
     $multiple = sendCode($session, $address, 424243, 'multiple-sector-code');
     codeCheck($multiple['result'] === "Код принят (3/4)\nЗакрыты секторы:\n• 1. 1+\n• 2. А_Б * [вход] <арка>\nВсего секторов: 4.\nОсталось до АП: 1.", 'Multiple closed sectors or stable IDs were lost after reordering');
     $unnamed = sendCode($session, $address, 424243, 'unnamed-sector-code');
@@ -81,6 +84,8 @@ try {
     codeCheck(str_ends_with($partial['result'], "Всего секторов: 4.\nОсталось до АП: 1."), 'Progress ignored the engine threshold for a partial-sector level');
     $zero = sendCode($session, $address, 424246, 'single-sector-code');
     codeCheck(str_ends_with($zero['result'], "Всего секторов: 4.\nОсталось до АП: 0."), 'Progress showed a negative remainder after reaching the threshold');
+    codeCheck(str_ends_with(formatCodeReply($zero['result']), 'Осталось до АП: <b>0</b>.'), 'Zero remaining progress is not bold');
+    codeCheck(formatCodeReply('Нет активной игры <b>тест</b>') === 'Нет активной игры &lt;b&gt;тест&lt;/b&gt;', 'Ordinary error text was interpreted as HTML');
     codeCheck(count(codeRequests($log)) === 16, 'Reporting sector names submitted additional codes');
     $implicit = sendCode($session, $address, 424247, 'implicit-level-code');
     codeCheck($implicit['UP'] === true && $implicit['levelid'] === 102

@@ -124,6 +124,7 @@ namespace {
         $calls=array_map(static fn($line)=>json_decode($line,true),file($work.'/telegram.jsonl',FILE_IGNORE_NEW_LINES));
         $reply=end($calls);
         drCheck($reply['method']==='sendMessage' && str_contains($reply['params']['text'],'Код принят'), 'Player received no answer for a leading-number code');
+        drCheck(($reply['params']['parse_mode']??'')==='HTML' && str_starts_with($reply['params']['text'],'✅ Код принят'), 'Code reply did not enable HTML or display the acceptance icon');
         $before=count(Encx\Client::$codes);
         drMessage('1др3',-1002); drMessage('1dr3 завтра');
         drCheck(count(Encx\Client::$codes)===$before, 'Leading-number detection leaked to another chat or ordinary text');

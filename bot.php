@@ -400,7 +400,8 @@ if(isset($update["message"]))
                                     while($row = db_fetch_assoc($sqlresult))
                                     {
                                         $result = sendCode($settings['cookies'],$settings["game_domain"],$settings["game_id"],$row['code']);
-                                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => $row['code'].': '.$result['result']));
+                                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, 'parse_mode' => 'HTML',
+                                            "text" => htmlspecialchars($row['code'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').': '.formatCodeReply($result['result'])));
                                         usleep(rand(300000,2000000));
                                     }
                                 break;
@@ -884,7 +885,8 @@ help - эта справка";
 
             if(!$result)
                 $result = "Ошибка";
-            apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
+            apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id,
+                'parse_mode' => 'HTML', "text" => formatCodeReply($result)));
         }
     }
 
@@ -988,7 +990,8 @@ help - эта справка";
             if(!$result)
                 $result = "Ошибка";
         
-            apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
+            apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id,
+                'parse_mode' => 'HTML', "text" => formatCodeReply($result)));
         } else
         {
             apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Нет активной игры"));
