@@ -484,7 +484,7 @@ if(isset($update["message"]))
                         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
                     } else 
                     {
-                        $levelText = getLevelText($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
+                        $levelText = getLevelText($settings['cookies'],$settings["game_domain"],$settings["game_id"],null,$game_chat_id);
 
                         sendChatList($chat_id, 'level', $levelText ? $levelText : 'Ошибка', 'HTML');
 
@@ -503,7 +503,7 @@ if(isset($update["message"]))
                     }
                     $delivery = null;
                     try {
-                        $delivery = getLevelRichMessage($settings['cookies'], $settings['game_domain'], $settings['game_id']);
+                        $delivery = getLevelRichMessage($settings['cookies'], $settings['game_domain'], $settings['game_id'], $game_chat_id);
                         if ($delivery === false) {
                             apiRequestJSON('sendMessage', $reply + ['text'=>'Не удалось получить текст уровня. Проверьте авторизацию в игре: /game auth']);
                             break;

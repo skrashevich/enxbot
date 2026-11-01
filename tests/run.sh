@@ -101,6 +101,7 @@ php "$TESTS/bonus_notifications.php" || exit 1
 
 echo "== Заголовок уровня при закрытой статистике =="
 php "$TESTS/level_text.php" || exit 1
+php "$TESTS/level_count.php" || exit 1
 
 echo "== HTML уровня в новом формате Telegram =="
 php "$TESTS/rich_level.php" || exit 1

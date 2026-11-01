@@ -34,10 +34,73 @@ function testGame($cookies,$domain,$gameid)
     return isset($model['GameTitle']) && $model['GameTitle'] !== '' ? $model['GameTitle'] : false;
 }
 
-function getLevelText($cookies,$domain,$gameid,$model=null)
+/** Count distinct visited levels per game, including the current one. */
+function levelProgressNumber($chatId, $domain, $gameid, $levelId)
+{
+    global $db;
+    if (!($db instanceof PDO) || (int)$levelId <= 0 || (int)$gameid <= 0) return null;
+    $key = 'level_visits_'.hash('sha256', strtolower(trim($domain)).':'.(int)$gameid);
+    $read = $db->prepare('SELECT id,value FROM settings WHERE chat_id=:chat AND name=:name ORDER BY id LIMIT 1');
+    $params = [':chat'=>(int)$chatId,':name'=>$key];
+    $decode = static function ($value) {
+        $ids = json_decode($value ?? '[]', true);
+        return array_fill_keys(array_filter(array_map('intval', is_array($ids) ? $ids : []), static fn($id)=>$id>0), true);
+    };
+    $read->execute($params);
+    $row = $read->fetch(PDO::FETCH_ASSOC);
+    $visits = $decode($row['value'] ?? null);
+    if (isset($visits[(int)$levelId])) return count($visits);
+    $transaction = !$db->inTransaction();
+    $started = false;
+    try {
+        if ($transaction) {$db->exec('BEGIN IMMEDIATE'); $started = true;}
+        $read->execute($params);
+        $row = $read->fetch(PDO::FETCH_ASSOC);
+        $visits = $decode($row['value'] ?? null);
+        if (!$row) {
+            $history = $db->prepare('SELECT level FROM codeslog WHERE chat_id=:chat UNION SELECT level FROM codes WHERE chat_id=:chat'
+                .' UNION SELECT level_id AS level FROM timers WHERE chat_id=:chat UNION SELECT level FROM coords WHERE chat_id=:chat'
+                .' UNION SELECT level FROM locations WHERE chat_id=:chat UNION SELECT last_level_id AS level FROM games WHERE chat_id=:chat AND game_id=:game');
+            $history->execute([':chat'=>(int)$chatId,':game'=>(int)$gameid]);
+            foreach ($history as $past) if ((int)$past['level'] > 0) $visits[(int)$past['level']] = true;
+            foreach (glob(__DIR__.'/screens/'.(int)$chatId.'.'.(int)$gameid.'.*.png') ?: [] as $file) {
+                $parts = explode('.', basename($file));
+                if ((int)($parts[2] ?? 0) > 0) $visits[(int)$parts[2]] = true;
+            }
+        }
+        $visits[(int)$levelId] = true;
+        $value = json_encode(array_keys($visits), JSON_THROW_ON_ERROR);
+        if ($row) {
+            $save = $db->prepare('UPDATE settings SET value=:value WHERE id=:id');
+            $save->execute([':value'=>$value,':id'=>$row['id']]);
+        } else {
+            $save = $db->prepare('INSERT INTO settings(chat_id,name,value) VALUES(:chat,:name,:value)');
+            $save->execute($params + [':value'=>$value]);
+        }
+        if ($transaction) $db->exec('COMMIT');
+        return count($visits);
+    } catch (Throwable $e) {
+        if ($started) $db->exec('ROLLBACK');
+        error_log('Level progress unavailable: '.get_class($e));
+        return null;
+    }
+}
+
+function levelHeading($model, $domain, $gameid, $chatId = null)
+{
+    $level = encxLevel($model);
+    if ($level === null) return '';
+    $number = $chatId === null ? null : levelProgressNumber($chatId, $domain, $gameid, $level['LevelId'] ?? 0);
+    $number = $number ?? ($level['Number'] ?? '?');
+    $total = (int)($model['CountLevels'] ?? 0);
+    if ($total <= 0) $total = is_array($model['Levels'] ?? null) ? count($model['Levels']) : 0;
+    return 'Уровень '.$number.($total > 0 && $total >= (int)$number ? ' из '.$total : '');
+}
+
+function getLevelText($cookies,$domain,$gameid,$model=null,$chatId=null)
 {
     try {
-        $model = $model ?? encxGameModel($cookies, $domain, $gameid);
+        $model = $model ?? encxGameModel($cookies, $domain, $gameid, true);
     } catch (Throwable $e) {
         return false;
     }
@@ -46,13 +109,17 @@ function getLevelText($cookies,$domain,$gameid,$model=null)
     if ($level === null || $levelText === '') {
         return false;
     }
-    $levelNum = $level['Number'] ?? '?';
-    $levelTotal = isset($model['Levels']) && is_array($model['Levels']) ? count($model['Levels']) : 0;
-    $title = "Уровень $levelNum";
-    if ($levelTotal > 0 && $levelTotal >= (int)$levelNum) {
-        $title .= " из $levelTotal";
-    }
-    return "<b>$title</b>\n".html2text($levelText);
+    return '<b>'.htmlspecialchars(levelHeading($model, $domain, $gameid, $chatId), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')."</b>\n".html2text($levelText);
+}
+
+/** One model for the AP heading, task text and timers. */
+function levelAnnouncement($cookies, $domain, $gameid, $chatId)
+{
+    try {$model = encxGameModel($cookies, $domain, $gameid, true);}
+    catch (Throwable $e) {$model = [];}
+    return ['heading'=>levelHeading($model, $domain, $gameid, $chatId),
+        'text'=>getLevelText($cookies, $domain, $gameid, $model, $chatId),
+        'hints'=>getHints($cookies, $domain, $gameid, false, $model)];
 }
 
 /** Resolve task links without forwarding the bot's cookies or credentials. */
@@ -154,9 +221,9 @@ function renderLevelRichNode($node, &$context, $inline = false, $depth = 0)
 }
 
 /** Fetch the current task once and retain its structure for sendRichMessage. */
-function getLevelRichHtml($cookies, $domain, $gameid, $model = null)
+function getLevelRichHtml($cookies, $domain, $gameid, $model = null, $chatId = null)
 {
-    try {$model = $model ?? encxGameModel($cookies, $domain, $gameid);}
+    try {$model = $model ?? encxGameModel($cookies, $domain, $gameid, true);}
     catch (Throwable $e) {error_log('Encounter rich level failed: '.$e->getMessage());return false;}
     $level = encxLevel($model);
     $task = encxTaskHTML($level);
@@ -167,9 +234,7 @@ function getLevelRichHtml($cookies, $domain, $gameid, $model = null)
     $previous = libxml_use_internal_errors(true);
     try {$document->loadHTML('<?xml encoding="UTF-8"><html><body>'.$task.'</body></html>', LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);}
     finally {libxml_clear_errors();libxml_use_internal_errors($previous);}
-    $number = $level['Number'] ?? '?';
-    $total = isset($model['Levels']) && is_array($model['Levels']) ? count($model['Levels']) : 0;
-    $title = 'Уровень '.$number.($total > 0 && $total >= (int)$number ? ' из '.$total : '');
+    $title = levelHeading($model, $domain, $gameid, $chatId);
     $context = ['base'=>(encxUsesHTTP($domain) ? 'http' : 'https').'://'.$domain.'/gameengines/encounter/play/'.(int)$gameid,'media'=>[]];
     $html = '<h2>'.htmlspecialchars($title, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</h2>';
     $body = $document->getElementsByTagName('body')->item(0);
@@ -229,19 +294,19 @@ function levelTaskNeedsBrowser($task)
 }
 
 /** Use static task HTML directly; render executable tasks before Rich Messages. */
-function getLevelRichMessage($cookies, $domain, $gameid)
+function getLevelRichMessage($cookies, $domain, $gameid, $chatId = null)
 {
-    try {$model = encxGameModel($cookies, $domain, $gameid);}
+    try {$model = encxGameModel($cookies, $domain, $gameid, true);}
     catch (Throwable $e) {return false;}
     $level = encxLevel($model);
     if ($level === null) return false;
     if (!levelTaskNeedsBrowser(encxTaskHTML($level))) {
-        $html = getLevelRichHtml($cookies, $domain, $gameid, $model);
+        $html = getLevelRichHtml($cookies, $domain, $gameid, $model, $chatId);
         return $html === false ? false : ['message'=>['html'=>$html,'skip_entity_detection'=>true],'files'=>[]];
     }
     $snapshot = renderLevelTask($cookies, $domain, $gameid, (int)($level['LevelId'] ?? 0));
     $model['Level']['Task'] = ['TaskText'=>$snapshot['html']];
-    $html = getLevelRichHtml($cookies, $domain, $gameid, $model);
+    $html = getLevelRichHtml($cookies, $domain, $gameid, $model, $chatId);
     if ($html === false) throw new RichLevelRenderException('После выполнения JavaScript текст задания пуст.');
     $files = [];
     $media = [];
@@ -672,6 +737,7 @@ function parseCode($text, $chat_id, $sender, $location=Array())
   $sectorstmp = getSectors($cookies,$settings["game_domain"],$settings["game_id"]);
   $sectorsBefore = $sectorstmp['sectors'];
 
+  levelProgressNumber($chat_id, $settings['game_domain'], $settings['game_id'], $settings['last_level_id']);
   $array = sendCode($cookies,$settings["game_domain"],$settings["game_id"],$code);
   $result = $array['result'];
   $levelId = $array['levelid'];
@@ -680,6 +746,7 @@ function parseCode($text, $chat_id, $sender, $location=Array())
   // а 0 - что движок не отдал LevelId: такое значение теряет текущий уровень
   if($levelId > 0 || $levelId == -1)
   {
+    if ($levelId > 0) levelProgressNumber($chat_id, $settings['game_domain'], $settings['game_id'], $levelId);
     $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $settings[chat_id]";
     db_query($db, $sql);
   }

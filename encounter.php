@@ -187,13 +187,39 @@ function encxDecode($json)
     return $value;
 }
 
-function encxGameModel($cookies, $domain, $gameid)
+function encxGameModel($cookies, $domain, $gameid, $withLevelCount = false)
 {
     $client = encxClient($domain, $cookies);
+    $capture = $withLevelCount && method_exists($client, 'setHARRecordingEnabled')
+        && method_exists($client, 'exportHAR') && method_exists($client, 'clearHAR');
     try {
-        return encxDecode($client->getGameModel((int)$gameid));
+        if ($capture) $client->setHARRecordingEnabled(true);
+        $model = encxDecode($client->getGameModel((int)$gameid));
+        // Older bindings omit CountLevels from their typed model. Recover only
+        // that field from the same HTTP response, in memory, without another GET
+        // or writing traffic/session data to logs or disk.
+        if ($capture && empty($model['CountLevels'])) {
+            $traffic = json_decode($client->exportHAR(), true);
+            foreach (array_reverse($traffic['log']['entries'] ?? []) as $entry) {
+                if ((int)($entry['response']['status'] ?? 0) !== 200) continue;
+                $path = parse_url($entry['request']['url'] ?? '', PHP_URL_PATH) ?: '';
+                if (!preg_match('#/(?:gameengines/encounter/play/'.(int)$gameid.'|games/'.(int)$gameid.'(?:/engine)?)/?$#i', $path)) continue;
+                $content = $entry['response']['content'] ?? [];
+                $body = $content['text'] ?? '';
+                if (($content['encoding'] ?? '') === 'base64') $body = base64_decode($body, true) ?: '';
+                $raw = json_decode($body, true);
+                if (!is_array($raw)) continue;
+                $raw = array_change_key_case($raw, CASE_LOWER);
+                $rawId = (int)($raw['gameid'] ?? $raw['game_id'] ?? 0);
+                if ($rawId > 0 && $rawId !== (int)$gameid) continue;
+                $total = (int)($raw['countlevels'] ?? $raw['count_levels'] ?? 0);
+                if ($total > 0) {$model['CountLevels'] = $total; break;}
+            }
+        }
+        return $model;
     } finally {
-        $client->close();
+        try {if ($capture) $client->clearHAR();}
+        finally {$client->close();}
     }
 }
 
@@ -240,7 +266,8 @@ function encxTaskHTML($level)
     if ($task === null) {
         return '';
     }
-    return (string)($task['TaskTextFormatted'] ?? $task['TaskText'] ?? '');
+    $formatted = (string)($task['TaskTextFormatted'] ?? '');
+    return $formatted !== '' ? $formatted : (string)($task['TaskText'] ?? '');
 }
 
 function encxAnswerText($answer)
