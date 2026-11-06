@@ -4,6 +4,7 @@ if (parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) === '/health') {
     echo 'ready';
     return;
 }
+if (getenv('ENXBOT_COUNT_TEST_LOG')) file_put_contents(getenv('ENXBOT_COUNT_TEST_LOG'), $_SERVER['REQUEST_METHOD']."\n", FILE_APPEND);
 $cookie = $_SERVER['HTTP_COOKIE'] ?? '';
 $answer = $_POST['LevelAction_Answer'] ?? $_POST['BonusAction_Answer'] ?? '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -78,8 +79,13 @@ if ($answer === 'finish-test-code') {
         'EngineAction' => ['LevelAction' => ['IsCorrectAnswer' => true]]]);
     return;
 }
-echo json_encode([
-    'Event' => 0, 'GameId' => 424242, 'GameTitle' => 'Local code submission test',
-    'Level' => ['LevelId' => 101, 'Number' => 7, 'Sectors' => [], 'Bonuses' => []],
+$countLevelFile = getenv('ENXBOT_COUNT_TEST_LEVEL');
+$currentId = $countLevelFile && is_file($countLevelFile) ? (int)file_get_contents($countLevelFile) : 101;
+$response = [
+    'Event' => 0, 'GameId' => 424242, 'CountLevels'=>28, 'Levels'=>[], 'GameTitle' => 'Local code submission test',
+    'Level' => ['LevelId' => $currentId, 'Number' => $currentId === 101 ? 7 : 17, 'Sectors' => [], 'Bonuses' => [], 'Task'=>['TaskText'=>'<p>Fixture task</p>']],
     'EngineAction' => ['LevelAction' => ['IsCorrectAnswer' => $answer !== 'wrong-test-code']],
-]);
+];
+// Legacy responses may omit the game ID even though the request names the game.
+if (getenv('ENXBOT_COUNT_TEST_LOG')) unset($response['GameId']);
+echo json_encode($response);

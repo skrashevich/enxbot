@@ -85,6 +85,11 @@ fi
 
 echo "== Скриншоты: HTTPS и ошибки рендерера =="
 php "$TESTS/screenshot.php" || exit 1
+if command -v chromium >/dev/null && command -v chromedriver >/dev/null; then
+    python3 "$TESTS/screenshot.py" || exit 1
+else
+    echo "  Chromium/ChromeDriver отсутствуют: браузерные проверки JS и скриншотов пропущены"
+fi
 
 echo "== Запоминание движка между клиентами и процессами =="
 php "$TESTS/bindings_version.php" || exit 1
@@ -96,6 +101,10 @@ php "$TESTS/bonus_notifications.php" || exit 1
 
 echo "== Заголовок уровня при закрытой статистике =="
 php "$TESTS/level_text.php" || exit 1
+php "$TESTS/level_count.php" || exit 1
+
+echo "== HTML уровня в новом формате Telegram =="
+php "$TESTS/rich_level.php" || exit 1
 
 echo "== Полные названия меток в списках =="
 php "$TESTS/sector_labels.php" || exit 1
@@ -103,11 +112,15 @@ php "$TESTS/sector_labels.php" || exit 1
 echo "== Автоприём DR/ДР-кодов и английская раскладка =="
 php "$TESTS/dr_codes.php" || exit 1
 
+echo "== Кнопки настроек и формат клавиатур Telegram =="
+php "$TESTS/settings.php" || exit 1
+
 echo "== Прогресс уровня через encx-cli v0.26.0 =="
 php "$TESTS/sector_progress.php" || exit 1
 
 echo "== Отправка кодов: сессия, задержка и ошибки ответа =="
 php "$TESTS/code_submission.php" || exit 1
+php "$TESTS/duplicate_codes.php" || exit 1
 
 echo "== Поиск удалённых в PHP 8 API =="
 php "$TESTS/check_removed_api.php" "$ROOT"/*.php || exit 1

@@ -53,9 +53,12 @@ while(true)
                     screenshot(false, $timer['chat_id'], $timer['cookies'],$timer["game_domain"],$timer["game_id"],$timer['level_id']);
                 break;
                 case 2:
-                    apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'Markdown', "text" => "*АП*"));
+                    $announcement = levelAnnouncement($timer['cookies'], $timer['game_domain'], $timer['game_id'], $timer['chat_id']);
+                    $heading = htmlspecialchars($announcement['heading'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+                    apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'HTML',
+                        "text" => '<b>АП</b>'.($heading !== '' ? "\n<b>".$heading.'</b>' : '')));
                     // Получаем текст нового уровня и выдаем его в чат
-                    $levelText = getLevelText($timer['cookies'],$timer["game_domain"],$timer["game_id"]);
+                    $levelText = $announcement['text'];
 
                     apiRequestJSON("sendMessage", array('chat_id' => $timer['chat_id'], "parse_mode" => 'HTML', "text" => $levelText ? $levelText : 'Ошибка получения текста уровня'));
 
@@ -67,7 +70,7 @@ while(true)
                     // Обновляем LevelID в базе. При сбое движка getHints()
                     // возвращает -1 - такое значение выкинуло бы игру из
                     // выборки cron.php, поэтому его не записываем.
-                    $array = getHints($timer['cookies'],$timer["game_domain"],$timer["game_id"]);
+                    $array = $announcement['hints'];
                     $levelId = $array['levelid'];
                     if($levelId > 0)
                     {
@@ -101,9 +104,12 @@ while(true)
         $knownLevel = isset($levels[$row['chat_id']]) ? $levels[$row['chat_id']] : 0;
         if( $knownLevel && $row['last_level_id'] != $knownLevel )
         {
-            apiRequestJSON("sendMessage", array('chat_id' => $row['chat_id'], "parse_mode" => 'Markdown', "text" => "*АП* (по движку)"));
+            $announcement = levelAnnouncement($row['cookies'], $row['game_domain'], $row['game_id'], $row['chat_id']);
+            $heading = htmlspecialchars($announcement['heading'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            apiRequestJSON("sendMessage", array('chat_id' => $row['chat_id'], "parse_mode" => 'HTML',
+                "text" => '<b>АП</b> (по движку)'.($heading !== '' ? "\n<b>".$heading.'</b>' : '')));
             // Получаем текст нового уровня и выдаем его в чат
-            $levelText = getLevelText($row['cookies'],$row["game_domain"],$row["game_id"]);
+            $levelText = $announcement['text'];
 
             apiRequestJSON("sendMessage", array('chat_id' => $row['chat_id'], "parse_mode" => 'HTML', "text" => $levelText ? $levelText : 'Ошибка получения текста уровня'));
             

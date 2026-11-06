@@ -3,6 +3,7 @@ require_once 'Html2Text.php';
 require_once __DIR__.'/encounter.php';
 
 class TelegramUnauthorizedException extends RuntimeException {}
+class RichLevelRenderException extends RuntimeException {}
 
 function auth($domain,$login,$pass)
 {
@@ -33,10 +34,73 @@ function testGame($cookies,$domain,$gameid)
     return isset($model['GameTitle']) && $model['GameTitle'] !== '' ? $model['GameTitle'] : false;
 }
 
-function getLevelText($cookies,$domain,$gameid,$model=null)
+/** Count distinct visited levels per game, including the current one. */
+function levelProgressNumber($chatId, $domain, $gameid, $levelId)
+{
+    global $db;
+    if (!($db instanceof PDO) || (int)$levelId <= 0 || (int)$gameid <= 0) return null;
+    $key = 'level_visits_'.hash('sha256', strtolower(trim($domain)).':'.(int)$gameid);
+    $read = $db->prepare('SELECT id,value FROM settings WHERE chat_id=:chat AND name=:name ORDER BY id LIMIT 1');
+    $params = [':chat'=>(int)$chatId,':name'=>$key];
+    $decode = static function ($value) {
+        $ids = json_decode($value ?? '[]', true);
+        return array_fill_keys(array_filter(array_map('intval', is_array($ids) ? $ids : []), static fn($id)=>$id>0), true);
+    };
+    $read->execute($params);
+    $row = $read->fetch(PDO::FETCH_ASSOC);
+    $visits = $decode($row['value'] ?? null);
+    if (isset($visits[(int)$levelId])) return count($visits);
+    $transaction = !$db->inTransaction();
+    $started = false;
+    try {
+        if ($transaction) {$db->exec('BEGIN IMMEDIATE'); $started = true;}
+        $read->execute($params);
+        $row = $read->fetch(PDO::FETCH_ASSOC);
+        $visits = $decode($row['value'] ?? null);
+        if (!$row) {
+            $history = $db->prepare('SELECT level FROM codeslog WHERE chat_id=:chat UNION SELECT level FROM codes WHERE chat_id=:chat'
+                .' UNION SELECT level_id AS level FROM timers WHERE chat_id=:chat UNION SELECT level FROM coords WHERE chat_id=:chat'
+                .' UNION SELECT level FROM locations WHERE chat_id=:chat UNION SELECT last_level_id AS level FROM games WHERE chat_id=:chat AND game_id=:game');
+            $history->execute([':chat'=>(int)$chatId,':game'=>(int)$gameid]);
+            foreach ($history as $past) if ((int)$past['level'] > 0) $visits[(int)$past['level']] = true;
+            foreach (glob(__DIR__.'/screens/'.(int)$chatId.'.'.(int)$gameid.'.*.png') ?: [] as $file) {
+                $parts = explode('.', basename($file));
+                if ((int)($parts[2] ?? 0) > 0) $visits[(int)$parts[2]] = true;
+            }
+        }
+        $visits[(int)$levelId] = true;
+        $value = json_encode(array_keys($visits), JSON_THROW_ON_ERROR);
+        if ($row) {
+            $save = $db->prepare('UPDATE settings SET value=:value WHERE id=:id');
+            $save->execute([':value'=>$value,':id'=>$row['id']]);
+        } else {
+            $save = $db->prepare('INSERT INTO settings(chat_id,name,value) VALUES(:chat,:name,:value)');
+            $save->execute($params + [':value'=>$value]);
+        }
+        if ($transaction) $db->exec('COMMIT');
+        return count($visits);
+    } catch (Throwable $e) {
+        if ($started) $db->exec('ROLLBACK');
+        error_log('Level progress unavailable: '.get_class($e));
+        return null;
+    }
+}
+
+function levelHeading($model, $domain, $gameid, $chatId = null)
+{
+    $level = encxLevel($model);
+    if ($level === null) return '';
+    $number = $chatId === null ? null : levelProgressNumber($chatId, $domain, $gameid, $level['LevelId'] ?? 0);
+    $number = $number ?? ($level['Number'] ?? '?');
+    $total = (int)($model['CountLevels'] ?? 0);
+    if ($total <= 0) $total = is_array($model['Levels'] ?? null) ? count($model['Levels']) : 0;
+    return 'Уровень '.$number.($total > 0 && $total >= (int)$number ? ' из '.$total : '');
+}
+
+function getLevelText($cookies,$domain,$gameid,$model=null,$chatId=null)
 {
     try {
-        $model = $model ?? encxGameModel($cookies, $domain, $gameid);
+        $model = $model ?? encxGameModel($cookies, $domain, $gameid, true);
     } catch (Throwable $e) {
         return false;
     }
@@ -45,13 +109,249 @@ function getLevelText($cookies,$domain,$gameid,$model=null)
     if ($level === null || $levelText === '') {
         return false;
     }
-    $levelNum = $level['Number'] ?? '?';
-    $levelTotal = isset($model['Levels']) && is_array($model['Levels']) ? count($model['Levels']) : 0;
-    $title = "Уровень $levelNum";
-    if ($levelTotal > 0 && $levelTotal >= (int)$levelNum) {
-        $title .= " из $levelTotal";
+    return '<b>'.htmlspecialchars(levelHeading($model, $domain, $gameid, $chatId), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')."</b>\n".html2text($levelText);
+}
+
+/** One model for the AP heading, task text and timers. */
+function levelAnnouncement($cookies, $domain, $gameid, $chatId)
+{
+    try {$model = encxGameModel($cookies, $domain, $gameid, true);}
+    catch (Throwable $e) {$model = [];}
+    return ['heading'=>levelHeading($model, $domain, $gameid, $chatId),
+        'text'=>getLevelText($cookies, $domain, $gameid, $model, $chatId),
+        'hints'=>getHints($cookies, $domain, $gameid, false, $model)];
+}
+
+/** Resolve task links without forwarding the bot's cookies or credentials. */
+function levelRichUrl($url, $base, $media = false)
+{
+    $url = str_replace(' ', '%20', trim((string)$url));
+    if ($url === '' || preg_match('/[\x00-\x1f\x7f]/', $url)) return '';
+    if (!$media && ($url[0] === '#' || preg_match('#^(mailto:|tel:|tg://user\?id=[0-9]+$)#i', $url))) return $url;
+    $parts = parse_url($url);
+    if ($parts === false) return '';
+    if (isset($parts['scheme'])) return in_array(strtolower($parts['scheme']), ['http','https'], true) && !empty($parts['host']) ? $url : '';
+    $origin = parse_url($base);
+    if (str_starts_with($url, '//')) return $origin['scheme'].':'.$url;
+    $path = $parts['path'] ?? '';
+    $path = $path === '' ? $origin['path'] : ($path[0] === '/' ? $path : dirname($origin['path']).'/'.$path);
+    $segments = [];
+    foreach (explode('/', $path) as $segment) {
+        if ($segment === '..') array_pop($segments);
+        elseif ($segment !== '' && $segment !== '.') $segments[] = $segment;
     }
-    return "<b>$title</b>\n".html2text($levelText);
+    return $origin['scheme'].'://'.$origin['host'].(isset($origin['port']) ? ':'.$origin['port'] : '')
+        .'/'.implode('/', $segments).(isset($parts['query']) ? '?'.$parts['query'] : '').(isset($parts['fragment']) ? '#'.$parts['fragment'] : '');
+}
+
+/** Keep media outside paragraph/inline wrappers, as required by Rich HTML. */
+function wrapLevelRichHtml($tag, $attributes, $content)
+{
+    if (!preg_match('/^(p|h[1-6]|b|strong|i|em|u|ins|s|strike|del|code|mark|sub|sup|a|tg-spoiler)$/', $tag)) return '<'.$tag.$attributes.'>'.$content.'</'.$tag.'>';
+    $result = '';
+    foreach (preg_split('/(\x1f[0-9]+\x1f)/', $content, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY) as $part) {
+        $result .= preg_match('/^\x1f[0-9]+\x1f$/', $part) ? $part : '<'.$tag.$attributes.'>'.$part.'</'.$tag.'>';
+    }
+    return $result;
+}
+
+/** Project website markup onto the documented Rich HTML subset. */
+function renderLevelRichNode($node, &$context, $inline = false, $depth = 0)
+{
+    $escape = static fn($text) => htmlspecialchars((string)$text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    if ($node instanceof DOMText) return $escape($node->nodeValue);
+    if (!($node instanceof DOMElement)) return '';
+    $tag = strtolower($node->tagName);
+    if ($node->hasAttribute('hidden') || preg_match('/(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)\s*(?:!important\s*)?(?:;|$)/i', $node->getAttribute('style'))) return '';
+    if (in_array($tag, ['script','style','head','title','form','button','object','embed','source','base','meta','link'], true)) return '';
+    if ($tag === 'br') return '<br/>';
+    if ($tag === 'hr') return $inline ? '<br/>' : '<hr/>';
+    if ($tag === 'input') return strtolower($node->getAttribute('type')) === 'checkbox' ? ($node->hasAttribute('checked') ? '☑ ' : '☐ ') : '';
+    if ($tag === 'iframe') {
+        $url = levelRichUrl($node->getAttribute('src'), $context['base'], true);
+        return $url !== '' ? '<a href="'.$escape($url).'">Видео</a>' : '';
+    }
+    if (in_array($tag, ['img','video','audio'], true)) {
+        $src = $node->getAttribute('src');
+        if ($src === '' && $node->getElementsByTagName('source')->length) $src = $node->getElementsByTagName('source')->item(0)->getAttribute('src');
+        $url = levelRichUrl($src, $context['base'], true);
+        $alt = $node->getAttribute('alt') ?: ['img'=>'Изображение','video'=>'Видео','audio'=>'Аудио'][$tag];
+        if ($url === '') return $escape($alt);
+        if ($inline || $depth >= 14 || count($context['media']) >= 50) return '<a href="'.$escape($url).'">'.$escape($alt).'</a>';
+        $token = "\x1f".count($context['media'])."\x1f";
+        $context['media'][$token] = '<'.$tag.' src="'.$escape($url).'"'.($node->hasAttribute('tg-spoiler') ? ' tg-spoiler' : '').($tag === 'img' ? '/>' : '></'.$tag.'>');
+        return $token;
+    }
+    if ($tag === 'pre') {
+        if ($inline) return '<code>'.$escape($node->textContent).'</code>';
+        $code = $node->getElementsByTagName('code')->item(0);
+        $class = $code && preg_match('/^language-[a-z0-9_+-]{1,30}$/i', $code->getAttribute('class')) ? ' class="'.$escape($code->getAttribute('class')).'"' : '';
+        return '<pre>'.($class !== '' ? '<code'.$class.'>' : '').$escape($node->textContent).($class !== '' ? '</code>' : '').'</pre>';
+    }
+    if ($tag === 'span' && in_array('tg-spoiler', explode(' ', $node->getAttribute('class')), true)) $tag = 'tg-spoiler';
+    $allowed = ['p','h1','h2','h3','h4','h5','h6','b','strong','i','em','u','ins','s','strike','del','code','mark','sub','sup','tg-spoiler',
+        'a','ul','ol','li','blockquote','aside','cite','footer','figure','figcaption','table','tr','td','th','caption','details','summary','tg-math','tg-math-block'];
+    $known = in_array($tag, $allowed, true);
+    $content = '';
+    $childInline = $inline || in_array($tag, ['td','th','caption','figcaption','summary','aside','footer','cite'], true)
+        || ($tag === 'blockquote' && $node->hasAttribute('expandable'));
+    foreach ($node->childNodes as $child) $content .= renderLevelRichNode($child, $context, $childInline, $depth + ($known ? 1 : 0));
+    if (in_array($tag, ['div','center','section','article'], true)) {
+        return preg_match('#<(p|h[1-6]|table|ul|ol|pre|details|blockquote|figure)\b#', $content) || $inline ? $content."\n" : wrapLevelRichHtml('p', '', $content);
+    }
+    if (!$known || $depth >= 14) return $content;
+    if ($inline && in_array($tag, ['p','h1','h2','h3','h4','h5','h6','ul','ol','li','table','tr','blockquote','aside','details'], true)) return $content.'<br/>';
+    $attributes = '';
+    if ($tag === 'a') {
+        $href = levelRichUrl($node->getAttribute('href'), $context['base']);
+        $name = $node->getAttribute('name') ?: $node->getAttribute('id');
+        if ($href !== '') $attributes .= ' href="'.$escape($href).'"';
+        if ($name !== '') $attributes .= ' name="'.$escape($name).'"';
+        if ($attributes === '') return $content;
+    }
+    foreach (['ol'=>['start','type'],'li'=>['value','type'],'td'=>['colspan','rowspan','align','valign'],'th'=>['colspan','rowspan','align','valign']][$tag] ?? [] as $attribute) {
+        $value = $node->getAttribute($attribute);
+        if ($value !== '' && preg_match('/^[a-z0-9-]+$/i', $value)) $attributes .= ' '.$attribute.'="'.$escape($value).'"';
+    }
+    foreach (['ol'=>['reversed'],'table'=>['bordered','striped','compact'],'details'=>['open'],'blockquote'=>['expandable']][$tag] ?? [] as $attribute) {
+        if ($node->hasAttribute($attribute)) $attributes .= ' '.$attribute;
+    }
+    if ($tag === 'table' && (int)$node->getAttribute('border') > 0 && !$node->hasAttribute('bordered')) $attributes .= ' bordered';
+    return wrapLevelRichHtml($tag, $attributes, $content);
+}
+
+/** Fetch the current task once and retain its structure for sendRichMessage. */
+function getLevelRichHtml($cookies, $domain, $gameid, $model = null, $chatId = null)
+{
+    try {$model = $model ?? encxGameModel($cookies, $domain, $gameid, true);}
+    catch (Throwable $e) {error_log('Encounter rich level failed: '.$e->getMessage());return false;}
+    $level = encxLevel($model);
+    $task = encxTaskHTML($level);
+    if ($level === null || trim($task) === '') return false;
+    $task = preg_replace('#<\s*/?\s*br\s*/?\s*>#i', '<br>', $task);
+    $task = preg_replace('/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u', '', $task);
+    $document = new DOMDocument('1.0', 'UTF-8');
+    $previous = libxml_use_internal_errors(true);
+    try {$document->loadHTML('<?xml encoding="UTF-8"><html><body>'.$task.'</body></html>', LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);}
+    finally {libxml_clear_errors();libxml_use_internal_errors($previous);}
+    $title = levelHeading($model, $domain, $gameid, $chatId);
+    $context = ['base'=>(encxUsesHTTP($domain) ? 'http' : 'https').'://'.$domain.'/gameengines/encounter/play/'.(int)$gameid,'media'=>[]];
+    $html = '<h2>'.htmlspecialchars($title, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</h2>';
+    $body = $document->getElementsByTagName('body')->item(0);
+    if (!$body) return false;
+    foreach ($body->childNodes as $child) $html .= renderLevelRichNode($child, $context);
+    $html = strtr($html, $context['media']);
+    if (mb_strlen(html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8'), 'UTF-8') > 32768) throw new LengthException('Текст уровня превышает лимит нового сообщения — 32 768 символов.');
+    if (preg_match_all('#<(?:p|h[1-6]|pre|footer|hr|ul|ol|li|blockquote|aside|table|tr|details|img|video|audio)\b#i', $html) > 500) throw new LengthException('В уровне слишком много блоков для одного расширенного сообщения.');
+    return $html;
+}
+
+/** Render in the authenticated browser; session data travels through stdin only. */
+function renderLevelTask($cookies, $domain, $gameid, $levelId)
+{
+    if (!defined('PHANTOMJS') || !is_executable(PHANTOMJS)) {
+        throw new RichLevelRenderException('Не найден Chromium-рендерер задания.');
+    }
+    $url = (encxUsesHTTP($domain) ? 'http' : 'https').'://'.$domain.'/gameengines/encounter/play/'.(int)$gameid.'?lang=ru';
+    $process = proc_open([PHANTOMJS, '--rich-html'], [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']], $pipes);
+    if (!is_resource($process)) throw new RichLevelRenderException('Не удалось запустить рендерер задания.');
+    fwrite($pipes[0], json_encode(['url'=>$url,'level_id'=>$levelId,
+        'cookies'=>json_decode(encxNormalizeCookies($cookies), true) ?: []], JSON_THROW_ON_ERROR));
+    fclose($pipes[0]);
+    $output = stream_get_contents($pipes[1]);
+    fclose($pipes[1]);
+    stream_get_contents($pipes[2]); // WebDriver output must never expose session data.
+    fclose($pipes[2]);
+    $status = proc_close($process);
+    if ($status === 2) throw new RichLevelRenderException('Сессия Encounter недействительна. Выполните /game auth');
+    if ($status !== 0) throw new RichLevelRenderException('Не удалось отрисовать задание после JavaScript. Страница не загрузилась или уровень изменился; повторите команду.');
+    $snapshot = json_decode($output, true);
+    if (!is_array($snapshot) || !is_string($snapshot['html'] ?? null) || !is_array($snapshot['images'] ?? null)) {
+        throw new RichLevelRenderException('Рендерер вернул некорректное задание.');
+    }
+    return $snapshot;
+}
+
+/** Select the browser only for executable markup or graphics that need a snapshot. */
+function levelTaskNeedsBrowser($task)
+{
+    if (trim($task) === '') return true;
+    $document = new DOMDocument('1.0', 'UTF-8');
+    $previous = libxml_use_internal_errors(true);
+    try {$document->loadHTML('<?xml encoding="UTF-8"><html><body>'.$task.'</body></html>', LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);}
+    finally {libxml_clear_errors();libxml_use_internal_errors($previous);}
+    foreach ($document->getElementsByTagName('*') as $node) {
+        $tag = strtolower($node->tagName);
+        if (in_array($tag, ['script','canvas','svg','iframe'], true)) return true;
+        if ($tag === 'img' && preg_match('/^\s*(?:data|blob):/i', $node->getAttribute('src'))) return true;
+        foreach ($node->attributes as $attribute) {
+            if (preg_match('/^on[a-z]+$/i', $attribute->name) && trim($attribute->value) !== '') return true;
+            if (in_array(strtolower($attribute->name), ['href','src','action','formaction','xlink:href'], true)
+                && str_starts_with(strtolower(preg_replace('/[\x00-\x20]/', '', $attribute->value)), 'javascript:')) return true;
+        }
+    }
+    return false;
+}
+
+/** Use static task HTML directly; render executable tasks before Rich Messages. */
+function getLevelRichMessage($cookies, $domain, $gameid, $chatId = null)
+{
+    try {$model = encxGameModel($cookies, $domain, $gameid, true);}
+    catch (Throwable $e) {return false;}
+    $level = encxLevel($model);
+    if ($level === null) return false;
+    if (!levelTaskNeedsBrowser(encxTaskHTML($level))) {
+        $html = getLevelRichHtml($cookies, $domain, $gameid, $model, $chatId);
+        return $html === false ? false : ['message'=>['html'=>$html,'skip_entity_detection'=>true],'files'=>[]];
+    }
+    $snapshot = renderLevelTask($cookies, $domain, $gameid, (int)($level['LevelId'] ?? 0));
+    $model['Level']['Task'] = ['TaskText'=>$snapshot['html']];
+    $html = getLevelRichHtml($cookies, $domain, $gameid, $model, $chatId);
+    if ($html === false) throw new RichLevelRenderException('После выполнения JavaScript текст задания пуст.');
+    $files = [];
+    $media = [];
+    $bytes = 0;
+    try {
+        if (count($snapshot['images']) > 10) throw new RichLevelRenderException('Слишком много изображений в JS-задании.');
+        foreach ($snapshot['images'] as $image) {
+            if (!is_array($image) || !is_string($image['id'] ?? null) || !is_string($image['png'] ?? null)) {
+                throw new RichLevelRenderException('Некорректная графика JS-задания.');
+            }
+            $id = $image['id'] ?? '';
+            $png = base64_decode($image['png'] ?? '', true);
+            $bytes += strlen($png ?: '');
+            if (isset($files[$id]) || !preg_match('/\Arender[0-9]+\z/', $id) || $png === false || !str_starts_with($png, "\x89PNG\r\n\x1a\n") || $bytes > 8*1024*1024) {
+                throw new RichLevelRenderException('Некорректная или слишком большая графика JS-задания.');
+            }
+            $placeholder = 'https://enxbot.invalid/snapshot/'.$id.'.png';
+            if (!str_contains($html, $placeholder)) continue;
+            // Tables allow inline content only: show the corresponding snapshot below.
+            if (!str_contains($html, 'src="'.$placeholder.'"')) $html .= '<img src="'.$placeholder.'"/>';
+            $path = tempnam(sys_get_temp_dir(), 'enxbot-rich-');
+            if ($path === false) throw new RichLevelRenderException('Не удалось сохранить графику задания.');
+            $files[$id] = $path;
+            if (file_put_contents($path, $png) === false) throw new RichLevelRenderException('Не удалось сохранить графику задания.');
+            $media[] = ['id'=>$id,'media'=>['type'=>'photo','media'=>'attach://'.$id]];
+            $html = str_replace($placeholder, 'tg://photo?id='.$id, $html);
+        }
+        if (preg_match_all('#<(?:p|h[1-6]|pre|footer|hr|ul|ol|li|blockquote|aside|table|tr|details|img|video|audio)\b#i', $html) > 500) {
+            throw new LengthException('В уровне слишком много блоков для одного расширенного сообщения.');
+        }
+        $message = ['html'=>$html,'skip_entity_detection'=>true];
+        if ($media) $message['media'] = $media;
+        return ['message'=>$message,'files'=>$files];
+    } catch (Throwable $e) {
+        foreach ($files as $file) unlink($file);
+        throw $e;
+    }
+}
+
+function sendLevelRichMessage($parameters, $files)
+{
+    if (!$files) return apiRequestJSON('sendRichMessage', $parameters);
+    foreach ($parameters as $name=>$value) if (is_array($value)) $parameters[$name] = json_encode($value, JSON_THROW_ON_ERROR);
+    foreach ($files as $name=>$path) $parameters[$name] = new CURLFile($path, 'image/png', $name.'.png');
+    return apiRequestPOST('sendRichMessage', $parameters);
 }
 
 function getHints($cookies,$domain,$gameid,$onlyOpen=false,$model=null)
@@ -162,7 +462,7 @@ function codeUnavailableLevelResult($model, $knownLevelId = 0, $answerResult = '
     } else {
         $message = $event !== 0 ? Encx\Helpers::eventText($event) : 'Движок не вернул текущий уровень';
     }
-    return Array('result' => $message, 'levelid' => $finished ? -1 : $knownLevelId, 'UP' => false);
+    return Array('result' => $message, 'levelid' => $finished ? -1 : $knownLevelId, 'UP' => false, 'submitted_levelid' => $knownLevelId);
 }
 
 /** Match sectors within one level by ID, with Order as the legacy fallback. */
@@ -199,21 +499,106 @@ function closedSectorLabels($oldLevel, $newLevel, $levelCompleted = false)
     return $labels;
 }
 
-function sendCode($cookies,$domain,$gameid,$code)
+/** Format plain engine results for Telegram without trusting names or bonus text. */
+function formatCodeReply($text)
+{
+    $html = htmlspecialchars((string)$text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $html = preg_replace_callback('/\AКод (принят|не принят)(?=[ (\n]|$)/u',
+        static fn($match) => ($match[1] === 'принят' ? '✅ ' : '❌ ').$match[0], $html);
+    $lines = explode("\n", $html);
+    $sectorList = false;
+    foreach ($lines as &$line) {
+        if (str_starts_with($line, 'Закрыт сектор: ')) {
+            $line = 'Закрыт сектор: <b>'.substr($line, strlen('Закрыт сектор: ')).'</b>';
+        } elseif ($sectorList && str_starts_with($line, '• ')) {
+            $line = '• <b>'.substr($line, strlen('• ')).'</b>';
+            continue;
+        }
+        $sectorList = $line === 'Закрыты секторы:';
+    }
+    unset($line);
+    $html = implode("\n", $lines);
+    return preg_replace('/(^|\n)(Осталось до АП: )([0-9]+)(?=\.?($|\n))/u', '$1$2<b>$3</b>', $html);
+}
+
+function codeIdentity($code)
+{
+    return mb_strtolower(trim(normalizeDrCode((string)$code)), 'UTF-8');
+}
+
+function acceptedCodeSetting($domain, $gameid, $levelId, $code)
+{
+    return 'accepted_code_'.hash('sha256', json_encode([
+        strtolower(trim((string)$domain)), (int)$gameid, (int)$levelId, codeIdentity($code),
+    ], JSON_THROW_ON_ERROR));
+}
+
+function rememberAcceptedCode($chatId, $domain, $gameid, $levelId, $code)
+{
+    global $db;
+    if ($chatId !== null && $levelId > 0 && $db instanceof PDO) {
+        try {
+            set_setting(acceptedCodeSetting($domain, $gameid, $levelId, $code), 'true', $chatId);
+        } catch (Throwable $e) {
+            // A bookkeeping failure must not replace a confirmed engine result.
+            error_log('Encounter accepted-code history failed: '.get_class($e));
+        }
+    }
+}
+
+function codeAlreadyEntered($chatId, $domain, $gameid, $level, $code)
+{
+    global $db;
+    $identity = codeIdentity($code);
+    if ($identity === '') return false;
+    foreach (array_merge($level['Sectors'] ?? [], $level['Bonuses'] ?? []) as $item) {
+        if (!empty($item['IsAnswered']) && codeIdentity(encxAnswerText($item['Answer'] ?? null)) === $identity) {
+            return true;
+        }
+    }
+    $levelId = (int)($level['LevelId'] ?? 0);
+    if ($chatId === null || $levelId <= 0 || !($db instanceof PDO)) return false;
+    if (get_setting(acceptedCodeSetting($domain, $gameid, $levelId, $code), $chatId) === 'true') return true;
+    // Older logs put transition codes against the NEXT level. Only their
+    // non-transition acknowledgements (with an x/y counter) are unambiguous.
+    $history = $db->prepare('SELECT code FROM codeslog WHERE chat_id=:chat AND level=:level AND `return` LIKE :accepted');
+    $history->execute([':chat'=>(int)$chatId, ':level'=>$levelId, ':accepted'=>'Код принят (%']);
+    while (($previous = $history->fetchColumn()) !== false) {
+        if (codeIdentity($previous) === $identity) return true;
+    }
+    return false;
+}
+
+function codeAttemptResult($result, $submittedLevelId, $duplicate)
+{
+    if ($duplicate) $result['result'] .= "\nДанный код уже введён";
+    $result['submitted_levelid'] = $submittedLevelId;
+    $result['duplicate'] = $duplicate;
+    return $result;
+}
+
+function sendCode($cookies,$domain,$gameid,$code,$chatId=null,$beforeModel=null)
 {
     $bonusAccepted = false;
     $codeAttempted = false;
+    $duplicate = false;
     $levelId = 0;
     try {
         $client = encxClient($domain, $cookies);
         try {
-            $before = encxDecode($client->getGameModel((int)$gameid));
+            $before = $beforeModel ?? encxDecode($client->getGameModel((int)$gameid));
             $oldLevel = encxLevel($before);
             if ($oldLevel === null) {
                 return codeUnavailableLevelResult($before);
             }
             $levelId = (int)($oldLevel['LevelId'] ?? 0);
             $levelNumber = (int)($oldLevel['Number'] ?? 0);
+            try {
+                $duplicate = codeAlreadyEntered($chatId, $domain, $gameid, $oldLevel, $code);
+            } catch (Throwable $e) {
+                // Repeat detection is informational; it must never block a POST.
+                error_log('Encounter repeat check failed: '.get_class($e));
+            }
             $codeAttempted = true;
             $after = encxDecode($client->sendCode((int)$gameid, $levelId, $levelNumber, (string)$code));
 
@@ -228,6 +613,9 @@ function sendCode($cookies,$domain,$gameid,$code)
                     $bonusAccepted = true;
                 }
             }
+            if ($accepted === true || $bonusAccepted) {
+                rememberAcceptedCode($chatId, $domain, $gameid, $levelId, $code);
+            }
         } finally {
             $client->close();
         }
@@ -238,7 +626,7 @@ function sendCode($cookies,$domain,$gameid,$code)
         $message = $codeAttempted
             ? 'Движок не подтвердил результат отправки. Код мог быть принят; проверьте его в игре перед повторной отправкой.'
             : 'Не удалось получить состояние игры. Код не отправлен.';
-        return Array('result' => $message, 'levelid' => $levelId, 'UP' => false);
+        return codeAttemptResult(['result'=>$message, 'levelid'=>$levelId, 'UP'=>false], $levelId, $duplicate);
     }
 
     if (!empty($bonusAccepted)) {
@@ -270,14 +658,14 @@ function sendCode($cookies,$domain,$gameid,$code)
         $done = $progress['done'];
         if (!$levelCompleted) $result .= " ($done/$total)";
         $remaining = $progress['remaining'];
-        $progressText = "\nВсего секторов: $total. Осталось до АП: $remaining.";
+        $progressText = "\nВсего секторов: $total.\nОсталось до АП: $remaining.";
     }
     $result .= $closedText.$progressText;
     if ($newLevel === null) {
-        return codeUnavailableLevelResult($after, $levelId, $result);
+        return codeAttemptResult(codeUnavailableLevelResult($after, $levelId, $result), $levelId, $duplicate);
     }
     if ($newLevelId > 0 && $newLevelId !== $levelId) {
-        return Array('result' => $result, 'levelid' => $newLevelId, 'UP' => true);
+        return codeAttemptResult(['result'=>$result, 'levelid'=>$newLevelId, 'UP'=>true], $levelId, $duplicate);
     }
 
     $oldBonuses = array();
@@ -299,21 +687,38 @@ function sendCode($cookies,$domain,$gameid,$code)
         }
     }
 
-    return Array('result' => $result, 'levelid' => $newLevelId ?: $levelId, 'UP' => false);
+    return codeAttemptResult(['result'=>$result, 'levelid'=>$newLevelId ?: $levelId, 'UP'=>false], $levelId, $duplicate);
 }
 
 /** Accept a whole DR code, optionally followed by the usual // comment. */
 function isDrCodeMessage($text)
 {
     $code = trim(explode('//', (string)$text, 2)[0]);
-    return preg_match('/\A(?:dr|др)[0-9][a-zа-яё0-9_-]*\z/iu', $code) === 1;
+    return preg_match('/\A[a-zа-яё0-9_-]+\z/iu', $code) === 1 && drCodeParts($code) !== false;
 }
 
-/** Unify DR/ДР and fix Russian keyboard letters in the code, not its comment. */
+/** Split a numeric D/R identifier from its optional suffix without reordering it. */
+function drCodeParts($code)
+{
+    if (preg_match('/\A[0-9drдр]+\z/iu', $code)) {
+        $head = $code;
+        $tail = '';
+    } elseif (preg_match('/\A([0-9drдр]*[0-9])(.*)\z/isu', $code, $parts)) {
+        $head = $parts[1];
+        $tail = $parts[2];
+    } else {
+        return false;
+    }
+    $head = strtr(mb_strtolower($head), ['д'=>'d','р'=>'r']);
+    if (!str_contains($head, 'd') || !str_contains($head, 'r') || !preg_match('/[0-9]/', $head)) return false;
+    return [$head, $tail];
+}
+
+/** Translate D/R letters in place and fix the suffix's keyboard layout. */
 function normalizeDrCode($code)
 {
-    $trimmed = trim((string)$code);
-    if (!preg_match('/\A(?:dr|др)(?=[0-9])/iu', $trimmed, $prefix)) return $code;
+    $parts = drCodeParts(trim((string)$code));
+    if ($parts === false) return $code;
     static $layout = null;
     if ($layout === null) {
         $lower = preg_split('//u', 'ёйцукенгшщзхъфывапролджэячсмитьбю', -1, PREG_SPLIT_NO_EMPTY);
@@ -321,7 +726,7 @@ function normalizeDrCode($code)
         $layout = array_combine($lower, str_split('`qwertyuiop[]asdfghjkl;\'zxcvbnm,.'))
             + array_combine($upper, str_split('~QWERTYUIOP{}ASDFGHJKL:"ZXCVBNM<>'));
     }
-    return 'dr'.strtr(substr($trimmed, strlen($prefix[0])), $layout);
+    return $parts[0].strtr($parts[1], $layout);
 }
 
 function parseCode($text, $chat_id, $sender, $location=Array())
@@ -395,10 +800,17 @@ function parseCode($text, $chat_id, $sender, $location=Array())
     return "Не проходит авторизация на игровом движке";
   }
 
-  $sectorstmp = getSectors($cookies,$settings["game_domain"],$settings["game_id"]);
+  try {
+    $beforeModel = encxGameModel($cookies, $settings['game_domain'], $settings['game_id']);
+  } catch (Throwable $e) {
+    error_log('Encounter code state failed: '.$e->getMessage());
+    return 'Не удалось получить состояние игры. Код не отправлен.';
+  }
+  $sectorstmp = getSectors($cookies,$settings["game_domain"],$settings["game_id"],$beforeModel);
   $sectorsBefore = $sectorstmp['sectors'];
 
-  $array = sendCode($cookies,$settings["game_domain"],$settings["game_id"],$code);
+  levelProgressNumber($chat_id, $settings['game_domain'], $settings['game_id'], $settings['last_level_id']);
+  $array = sendCode($cookies,$settings["game_domain"],$settings["game_id"],$code,$chat_id,$beforeModel);
   $result = $array['result'];
   $levelId = $array['levelid'];
 
@@ -406,12 +818,14 @@ function parseCode($text, $chat_id, $sender, $location=Array())
   // а 0 - что движок не отдал LevelId: такое значение теряет текущий уровень
   if($levelId > 0 || $levelId == -1)
   {
+    if ($levelId > 0) levelProgressNumber($chat_id, $settings['game_domain'], $settings['game_id'], $levelId);
     $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $settings[chat_id]";
     db_query($db, $sql);
   }
+  $submittedLevelId = (int)($array['submitted_levelid'] ?? $levelId);
   $sql = "INSERT INTO codeslog (chat_id, level, code, comment, `time`, sender, `return`) VALUES
           (
-            $chat_id, ".intval($levelId).", '".db_escape($db, $code)."', '".db_escape($db, $comment)."', ".time().", '$sender', '".db_escape($db, $result)."'
+            $chat_id, $submittedLevelId, '".db_escape($db, $code)."', '".db_escape($db, $comment)."', ".time().", '$sender', '".db_escape($db, $result)."'
           )";
   db_query($db, $sql);
 

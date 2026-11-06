@@ -92,6 +92,13 @@ if (strpos($path, '/tg/') === 0) {
     }
     $failMode = trim((string)$failMode);
 
+    if ($method === 'sendRichMessage' && $failMode === 'rich400') {
+        http_response_code(400);
+        header('Content-Type: application/json');
+        echo json_encode(['ok'=>false,'error_code'=>400,'description'=>'Bad Request: rich message rejected']);
+        return true;
+    }
+
     if ($failMode !== '' && $method === 'getUpdates') {
         if ($failMode === '401') {
             http_response_code(401);
@@ -156,6 +163,9 @@ function logTelegramCall($method, $body)
         if ($key !== 'method' && !isset($params[$key])) {
             $params[$key] = $value;
         }
+    }
+    foreach ($_FILES as $name=>$file) {
+        $params['uploads'][$name] = ['png'=>file_get_contents($file['tmp_name'], false, null, 0, 8)==="\x89PNG\r\n\x1a\n"];
     }
 
     $entry = json_encode(

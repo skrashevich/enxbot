@@ -45,6 +45,7 @@ $helptext = "Это бот для игры Encounter
 
 *Игровой процесс*:
 /level - текст текущего уровня; координаты из него уходят отдельной локацией
+/get\_level\_new - уровень с таблицами, списками и медиа в новом формате Telegram
 /hints - подсказки на уровне
 /schema - схема дохода
 /sectors - сводка по секторам уровня
@@ -398,8 +399,9 @@ if(isset($update["message"]))
                                     $sqlresult = db_query($db, $sql);
                                     while($row = db_fetch_assoc($sqlresult))
                                     {
-                                        $result = sendCode($settings['cookies'],$settings["game_domain"],$settings["game_id"],$row['code']);
-                                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => $row['code'].': '.$result['result']));
+                                        $result = sendCode($settings['cookies'],$settings["game_domain"],$settings["game_id"],$row['code'],$game_chat_id);
+                                        apiRequestJSON("sendMessage", array('chat_id' => $chat_id, 'parse_mode' => 'HTML',
+                                            "text" => htmlspecialchars($row['code'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').': '.formatCodeReply($result['result'])));
                                         usleep(rand(300000,2000000));
                                     }
                                 break;
@@ -422,13 +424,13 @@ if(isset($update["message"]))
                                         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => "Карта не настроена: не задана константа LOCATION_MAP_GAMENAME в config.php"));
                                         break;
                                     }
-                                    $buttons = Array(Array(Array('text' => 'Открыть в новой вкладке', 'callback_game' => Array())));
+                                    $buttons = Array(Array(Array('text' => 'Открыть в новой вкладке', 'callback_game' => new stdClass())));
                                     $keyboard = Array('inline_keyboard' => $buttons);
                                     apiRequestJSON("sendGame",
                                         array(
                                             'chat_id' => $chat_id,
                                             'game_short_name' => LOCATION_MAP_GAMENAME,
-                                            'reply_markup' => json_encode($keyboard),
+                                            'reply_markup' => $keyboard,
                                         )
                                     );
                                 break;
@@ -468,7 +470,7 @@ if(isset($update["message"]))
                     }
                     $buttons = getSettingsButtons($chat_id);
                     $keyboard = Array('inline_keyboard' => $buttons);
-                    $result = apiRequestJSON("sendMessage", array('chat_id' => $chat_id, 'reply_markup' => json_encode($keyboard), "text" => "Настройки игры"));
+                    $result = apiRequestJSON("sendMessage", array('chat_id' => $chat_id, 'reply_markup' => $keyboard, "text" => "Настройки игры"));
 
                     if(isset($result['message_id']))
                     {
@@ -482,7 +484,7 @@ if(isset($update["message"]))
                         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
                     } else 
                     {
-                        $levelText = getLevelText($settings['cookies'],$settings["game_domain"],$settings["game_id"]);
+                        $levelText = getLevelText($settings['cookies'],$settings["game_domain"],$settings["game_id"],null,$game_chat_id);
 
                         sendChatList($chat_id, 'level', $levelText ? $levelText : 'Ошибка', 'HTML');
 
@@ -490,6 +492,30 @@ if(isset($update["message"]))
                         publishCoords($levelText, $chat_id);
                     }
 
+                break;
+                case '/get_level_new':
+                    $reply = ['chat_id'=>$chat_id,
+                        'reply_parameters'=>['message_id'=>$message_id,'allow_sending_without_reply'=>true]];
+                    if (isset($message['message_thread_id'])) $reply['message_thread_id'] = $message['message_thread_id'];
+                    if (!$settings['status']) {
+                        apiRequestJSON('sendMessage', $reply + ['text'=>'Нет активной игры']);
+                        break;
+                    }
+                    $delivery = null;
+                    try {
+                        $delivery = getLevelRichMessage($settings['cookies'], $settings['game_domain'], $settings['game_id'], $game_chat_id);
+                        if ($delivery === false) {
+                            apiRequestJSON('sendMessage', $reply + ['text'=>'Не удалось получить текст уровня. Проверьте авторизацию в игре: /game auth']);
+                            break;
+                        }
+                        if (sendLevelRichMessage($reply + ['rich_message'=>$delivery['message']], $delivery['files']) === false) {
+                            apiRequestJSON('sendMessage', $reply + ['text'=>'Telegram не принял уровень в новом формате. Проверьте HTML задания, доступность медиа и права бота на их отправку.']);
+                        }
+                    } catch (LengthException | RichLevelRenderException $e) {
+                        apiRequestJSON('sendMessage', $reply + ['text'=>$e->getMessage()]);
+                    } finally {
+                        foreach (($delivery['files'] ?? []) as $file) unlink($file);
+                    }
                 break;
                 case '/coords':
                     if(publishCoords(implode(' ', $args), $chat_id) === 0)
@@ -704,12 +730,12 @@ if(isset($update["message"]))
                     {
                         case 'off':
                             $keyboard = Array('remove_keyboard' => true, 'selective' => true);
-                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, 'reply_markup' => json_encode($keyboard), "text" => "Готово"));
+                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, 'reply_markup' => $keyboard, "text" => "Готово"));
                         break;
                         case '':
                             $buttons = Array(Array('!зко', '!нко'), Array('/schema', '/hints'));
                             $keyboard = Array('keyboard' => $buttons, 'selective' => true, 'resize_keyboard' => true);
-                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, 'reply_markup' => json_encode($keyboard), "text" => "Готово"));
+                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, 'reply_markup' => $keyboard, "text" => "Готово"));
                         break;
                         default:
                             $buttons = Array();
@@ -721,7 +747,7 @@ if(isset($update["message"]))
                                 $buttons[] = Array($cmds[$i], $second);
                             }
                             $keyboard = Array('keyboard' => $buttons, 'selective' => true, 'resize_keyboard' => true);
-                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, 'reply_markup' => json_encode($keyboard), "text" => "Готово"));
+                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, 'reply_markup' => $keyboard, "text" => "Готово"));
                         break;
                     }
                 break;
@@ -859,7 +885,8 @@ help - эта справка";
 
             if(!$result)
                 $result = "Ошибка";
-            apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
+            apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id,
+                'parse_mode' => 'HTML', "text" => formatCodeReply($result)));
         }
     }
 
@@ -963,7 +990,8 @@ help - эта справка";
             if(!$result)
                 $result = "Ошибка";
         
-            apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => $result));
+            apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id,
+                'parse_mode' => 'HTML', "text" => formatCodeReply($result)));
         } else
         {
             apiRequest("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, "text" => "Нет активной игры"));
@@ -1076,7 +1104,7 @@ if(isset($update["callback_query"]))
 
                 // Обновляем сообщение с настройками на месте, не плодя новых
                 $keyboard = Array('inline_keyboard' => getSettingsButtons($chat_id));
-                apiRequestJSON("editMessageText", array('chat_id' => $chat_id, 'message_id' => intval(get_setting('last_settings_message_id', $chat_id)), "text" => "Настройки игры", 'reply_markup' => json_encode($keyboard)));
+                apiRequestJSON("editMessageText", array('chat_id' => $chat_id, 'message_id' => intval(get_setting('last_settings_message_id', $chat_id)), "text" => "Настройки игры", 'reply_markup' => $keyboard));
             } else
             {
                 apiRequest("answerCallbackQuery",

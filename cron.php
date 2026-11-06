@@ -142,6 +142,7 @@ while($game = db_fetch_assoc($gameresult))
     // игра перестанет попадать в выборку "last_level_id >= 0" и бот её потеряет.
     if($array['levelid'] > 0)
     {
+        levelProgressNumber($game['chat_id'], $game['game_domain'], $game['game_id'], $array['levelid']);
         $sql = "UPDATE games SET last_level_id = ".intval($array['levelid'])." WHERE game_id = $game[game_id] AND chat_id = $game[chat_id]";
         db_query($db, $sql);
     }
