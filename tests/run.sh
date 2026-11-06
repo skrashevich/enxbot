@@ -112,6 +112,9 @@ php "$TESTS/sector_labels.php" || exit 1
 echo "== Автоприём DR/ДР-кодов и английская раскладка =="
 php "$TESTS/dr_codes.php" || exit 1
 
+echo "== Кнопки настроек и формат клавиатур Telegram =="
+php "$TESTS/settings.php" || exit 1
+
 echo "== Прогресс уровня через encx-cli v0.26.0 =="
 php "$TESTS/sector_progress.php" || exit 1
 

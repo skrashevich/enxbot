@@ -424,13 +424,13 @@ if(isset($update["message"]))
                                         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "text" => "Карта не настроена: не задана константа LOCATION_MAP_GAMENAME в config.php"));
                                         break;
                                     }
-                                    $buttons = Array(Array(Array('text' => 'Открыть в новой вкладке', 'callback_game' => Array())));
+                                    $buttons = Array(Array(Array('text' => 'Открыть в новой вкладке', 'callback_game' => new stdClass())));
                                     $keyboard = Array('inline_keyboard' => $buttons);
                                     apiRequestJSON("sendGame",
                                         array(
                                             'chat_id' => $chat_id,
                                             'game_short_name' => LOCATION_MAP_GAMENAME,
-                                            'reply_markup' => json_encode($keyboard),
+                                            'reply_markup' => $keyboard,
                                         )
                                     );
                                 break;
@@ -470,7 +470,7 @@ if(isset($update["message"]))
                     }
                     $buttons = getSettingsButtons($chat_id);
                     $keyboard = Array('inline_keyboard' => $buttons);
-                    $result = apiRequestJSON("sendMessage", array('chat_id' => $chat_id, 'reply_markup' => json_encode($keyboard), "text" => "Настройки игры"));
+                    $result = apiRequestJSON("sendMessage", array('chat_id' => $chat_id, 'reply_markup' => $keyboard, "text" => "Настройки игры"));
 
                     if(isset($result['message_id']))
                     {
@@ -730,12 +730,12 @@ if(isset($update["message"]))
                     {
                         case 'off':
                             $keyboard = Array('remove_keyboard' => true, 'selective' => true);
-                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, 'reply_markup' => json_encode($keyboard), "text" => "Готово"));
+                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, 'reply_markup' => $keyboard, "text" => "Готово"));
                         break;
                         case '':
                             $buttons = Array(Array('!зко', '!нко'), Array('/schema', '/hints'));
                             $keyboard = Array('keyboard' => $buttons, 'selective' => true, 'resize_keyboard' => true);
-                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, 'reply_markup' => json_encode($keyboard), "text" => "Готово"));
+                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, 'reply_markup' => $keyboard, "text" => "Готово"));
                         break;
                         default:
                             $buttons = Array();
@@ -747,7 +747,7 @@ if(isset($update["message"]))
                                 $buttons[] = Array($cmds[$i], $second);
                             }
                             $keyboard = Array('keyboard' => $buttons, 'selective' => true, 'resize_keyboard' => true);
-                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, 'reply_markup' => json_encode($keyboard), "text" => "Готово"));
+                            apiRequestJSON("sendMessage", array('chat_id' => $chat_id, "reply_to_message_id" => $message_id, 'reply_markup' => $keyboard, "text" => "Готово"));
                         break;
                     }
                 break;
@@ -1104,7 +1104,7 @@ if(isset($update["callback_query"]))
 
                 // Обновляем сообщение с настройками на месте, не плодя новых
                 $keyboard = Array('inline_keyboard' => getSettingsButtons($chat_id));
-                apiRequestJSON("editMessageText", array('chat_id' => $chat_id, 'message_id' => intval(get_setting('last_settings_message_id', $chat_id)), "text" => "Настройки игры", 'reply_markup' => json_encode($keyboard)));
+                apiRequestJSON("editMessageText", array('chat_id' => $chat_id, 'message_id' => intval(get_setting('last_settings_message_id', $chat_id)), "text" => "Настройки игры", 'reply_markup' => $keyboard));
             } else
             {
                 apiRequest("answerCallbackQuery",
