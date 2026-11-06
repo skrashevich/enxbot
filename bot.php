@@ -399,7 +399,7 @@ if(isset($update["message"]))
                                     $sqlresult = db_query($db, $sql);
                                     while($row = db_fetch_assoc($sqlresult))
                                     {
-                                        $result = sendCode($settings['cookies'],$settings["game_domain"],$settings["game_id"],$row['code']);
+                                        $result = sendCode($settings['cookies'],$settings["game_domain"],$settings["game_id"],$row['code'],$game_chat_id);
                                         apiRequestJSON("sendMessage", array('chat_id' => $chat_id, 'parse_mode' => 'HTML',
                                             "text" => htmlspecialchars($row['code'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').': '.formatCodeReply($result['result'])));
                                         usleep(rand(300000,2000000));

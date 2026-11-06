@@ -462,7 +462,7 @@ function codeUnavailableLevelResult($model, $knownLevelId = 0, $answerResult = '
     } else {
         $message = $event !== 0 ? Encx\Helpers::eventText($event) : 'Движок не вернул текущий уровень';
     }
-    return Array('result' => $message, 'levelid' => $finished ? -1 : $knownLevelId, 'UP' => false);
+    return Array('result' => $message, 'levelid' => $finished ? -1 : $knownLevelId, 'UP' => false, 'submitted_levelid' => $knownLevelId);
 }
 
 /** Match sectors within one level by ID, with Order as the legacy fallback. */
@@ -521,21 +521,84 @@ function formatCodeReply($text)
     return preg_replace('/(^|\n)(Осталось до АП: )([0-9]+)(?=\.?($|\n))/u', '$1$2<b>$3</b>', $html);
 }
 
-function sendCode($cookies,$domain,$gameid,$code)
+function codeIdentity($code)
+{
+    return mb_strtolower(trim(normalizeDrCode((string)$code)), 'UTF-8');
+}
+
+function acceptedCodeSetting($domain, $gameid, $levelId, $code)
+{
+    return 'accepted_code_'.hash('sha256', json_encode([
+        strtolower(trim((string)$domain)), (int)$gameid, (int)$levelId, codeIdentity($code),
+    ], JSON_THROW_ON_ERROR));
+}
+
+function rememberAcceptedCode($chatId, $domain, $gameid, $levelId, $code)
+{
+    global $db;
+    if ($chatId !== null && $levelId > 0 && $db instanceof PDO) {
+        try {
+            set_setting(acceptedCodeSetting($domain, $gameid, $levelId, $code), 'true', $chatId);
+        } catch (Throwable $e) {
+            // A bookkeeping failure must not replace a confirmed engine result.
+            error_log('Encounter accepted-code history failed: '.get_class($e));
+        }
+    }
+}
+
+function codeAlreadyEntered($chatId, $domain, $gameid, $level, $code)
+{
+    global $db;
+    $identity = codeIdentity($code);
+    if ($identity === '') return false;
+    foreach (array_merge($level['Sectors'] ?? [], $level['Bonuses'] ?? []) as $item) {
+        if (!empty($item['IsAnswered']) && codeIdentity(encxAnswerText($item['Answer'] ?? null)) === $identity) {
+            return true;
+        }
+    }
+    $levelId = (int)($level['LevelId'] ?? 0);
+    if ($chatId === null || $levelId <= 0 || !($db instanceof PDO)) return false;
+    if (get_setting(acceptedCodeSetting($domain, $gameid, $levelId, $code), $chatId) === 'true') return true;
+    // Older logs put transition codes against the NEXT level. Only their
+    // non-transition acknowledgements (with an x/y counter) are unambiguous.
+    $history = $db->prepare('SELECT code FROM codeslog WHERE chat_id=:chat AND level=:level AND `return` LIKE :accepted');
+    $history->execute([':chat'=>(int)$chatId, ':level'=>$levelId, ':accepted'=>'Код принят (%']);
+    while (($previous = $history->fetchColumn()) !== false) {
+        if (codeIdentity($previous) === $identity) return true;
+    }
+    return false;
+}
+
+function codeAttemptResult($result, $submittedLevelId, $duplicate)
+{
+    if ($duplicate) $result['result'] .= "\nДанный код уже введён";
+    $result['submitted_levelid'] = $submittedLevelId;
+    $result['duplicate'] = $duplicate;
+    return $result;
+}
+
+function sendCode($cookies,$domain,$gameid,$code,$chatId=null,$beforeModel=null)
 {
     $bonusAccepted = false;
     $codeAttempted = false;
+    $duplicate = false;
     $levelId = 0;
     try {
         $client = encxClient($domain, $cookies);
         try {
-            $before = encxDecode($client->getGameModel((int)$gameid));
+            $before = $beforeModel ?? encxDecode($client->getGameModel((int)$gameid));
             $oldLevel = encxLevel($before);
             if ($oldLevel === null) {
                 return codeUnavailableLevelResult($before);
             }
             $levelId = (int)($oldLevel['LevelId'] ?? 0);
             $levelNumber = (int)($oldLevel['Number'] ?? 0);
+            try {
+                $duplicate = codeAlreadyEntered($chatId, $domain, $gameid, $oldLevel, $code);
+            } catch (Throwable $e) {
+                // Repeat detection is informational; it must never block a POST.
+                error_log('Encounter repeat check failed: '.get_class($e));
+            }
             $codeAttempted = true;
             $after = encxDecode($client->sendCode((int)$gameid, $levelId, $levelNumber, (string)$code));
 
@@ -550,6 +613,9 @@ function sendCode($cookies,$domain,$gameid,$code)
                     $bonusAccepted = true;
                 }
             }
+            if ($accepted === true || $bonusAccepted) {
+                rememberAcceptedCode($chatId, $domain, $gameid, $levelId, $code);
+            }
         } finally {
             $client->close();
         }
@@ -560,7 +626,7 @@ function sendCode($cookies,$domain,$gameid,$code)
         $message = $codeAttempted
             ? 'Движок не подтвердил результат отправки. Код мог быть принят; проверьте его в игре перед повторной отправкой.'
             : 'Не удалось получить состояние игры. Код не отправлен.';
-        return Array('result' => $message, 'levelid' => $levelId, 'UP' => false);
+        return codeAttemptResult(['result'=>$message, 'levelid'=>$levelId, 'UP'=>false], $levelId, $duplicate);
     }
 
     if (!empty($bonusAccepted)) {
@@ -596,10 +662,10 @@ function sendCode($cookies,$domain,$gameid,$code)
     }
     $result .= $closedText.$progressText;
     if ($newLevel === null) {
-        return codeUnavailableLevelResult($after, $levelId, $result);
+        return codeAttemptResult(codeUnavailableLevelResult($after, $levelId, $result), $levelId, $duplicate);
     }
     if ($newLevelId > 0 && $newLevelId !== $levelId) {
-        return Array('result' => $result, 'levelid' => $newLevelId, 'UP' => true);
+        return codeAttemptResult(['result'=>$result, 'levelid'=>$newLevelId, 'UP'=>true], $levelId, $duplicate);
     }
 
     $oldBonuses = array();
@@ -621,7 +687,7 @@ function sendCode($cookies,$domain,$gameid,$code)
         }
     }
 
-    return Array('result' => $result, 'levelid' => $newLevelId ?: $levelId, 'UP' => false);
+    return codeAttemptResult(['result'=>$result, 'levelid'=>$newLevelId ?: $levelId, 'UP'=>false], $levelId, $duplicate);
 }
 
 /** Accept a whole DR code, optionally followed by the usual // comment. */
@@ -734,11 +800,17 @@ function parseCode($text, $chat_id, $sender, $location=Array())
     return "Не проходит авторизация на игровом движке";
   }
 
-  $sectorstmp = getSectors($cookies,$settings["game_domain"],$settings["game_id"]);
+  try {
+    $beforeModel = encxGameModel($cookies, $settings['game_domain'], $settings['game_id']);
+  } catch (Throwable $e) {
+    error_log('Encounter code state failed: '.$e->getMessage());
+    return 'Не удалось получить состояние игры. Код не отправлен.';
+  }
+  $sectorstmp = getSectors($cookies,$settings["game_domain"],$settings["game_id"],$beforeModel);
   $sectorsBefore = $sectorstmp['sectors'];
 
   levelProgressNumber($chat_id, $settings['game_domain'], $settings['game_id'], $settings['last_level_id']);
-  $array = sendCode($cookies,$settings["game_domain"],$settings["game_id"],$code);
+  $array = sendCode($cookies,$settings["game_domain"],$settings["game_id"],$code,$chat_id,$beforeModel);
   $result = $array['result'];
   $levelId = $array['levelid'];
 
@@ -750,9 +822,10 @@ function parseCode($text, $chat_id, $sender, $location=Array())
     $sql = "UPDATE games SET last_level_id = ".intval($levelId)." WHERE chat_id = $settings[chat_id]";
     db_query($db, $sql);
   }
+  $submittedLevelId = (int)($array['submitted_levelid'] ?? $levelId);
   $sql = "INSERT INTO codeslog (chat_id, level, code, comment, `time`, sender, `return`) VALUES
           (
-            $chat_id, ".intval($levelId).", '".db_escape($db, $code)."', '".db_escape($db, $comment)."', ".time().", '$sender', '".db_escape($db, $result)."'
+            $chat_id, $submittedLevelId, '".db_escape($db, $code)."', '".db_escape($db, $comment)."', ".time().", '$sender', '".db_escape($db, $result)."'
           )";
   db_query($db, $sql);
 

@@ -1,6 +1,6 @@
 <?php
-// Exercise the actual JSON transport: a permissive API mock can accept a
-// double-encoded keyboard even though Telegram does not render its buttons.
+// Verify structured keyboards in the actual JSON transport. The local mock
+// cannot check whether a particular Telegram client renders its buttons.
 $root = dirname(__DIR__);
 $original = getcwd();
 $work = sys_get_temp_dir().'/enxbot-settings-'.bin2hex(random_bytes(6));
